@@ -1,0 +1,15 @@
+Django
+django-ninja
+django-ninja-jwt[crypto]
+psycopg[binary]
+python-decouple
+pydantic
+python-dotenv
+celery
+redis
+django-celery-results
+requests
+streamlit
+pytest
+pytest-django
+gunicorn
