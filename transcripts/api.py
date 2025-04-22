@@ -1,114 +1,83 @@
-from ninja import Router, File, Form
-from ninja.files import UploadedFile
+# transcripts/api.py
+from typing import List, Optional
 from django.shortcuts import get_object_or_404
-from django.http import HttpRequest
-from meetings.models import Meeting
-from .models import Transcript
-from .schemas import (
-    TranscriptSchemaIn,
-    TranscriptSchemaOut,
-    TranscriptStatusSchemaOut,
-    ProcessingStatusEnum,
-    ErrorDetail
-)
-from typing import Union, Optional
-import logging
+from django.db import transaction
+from ninja import Router, File
+from ninja.files import UploadedFile
+from ninja_jwt.authentication import JWTAuth
 
-from .utils import extract_text, SUPPORTED_CONTENT_TYPES
+from .models import Transcript, Meeting
+from .schemas import TranscriptSchemaIn, TranscriptSchemaOut, TranscriptStatusSchemaOut, ErrorDetail
 
-logger = logging.getLogger(__name__)
+# Create router for transcripts
+router = Router(tags=["transcripts"])
 
-router = Router(tags=["Transcripts"])
 
-# --- Endpoint to Submit Transcript (Text or File) ---
-@router.post(
-    "/meetings/{meeting_id}/transcript",
-    response={201: TranscriptSchemaOut, 404: ErrorDetail, 400: ErrorDetail, 409: ErrorDetail, 413: ErrorDetail, 415: ErrorDetail},
-    summary="Submit a transcript (JSON text or file upload)",
-    description="Upload transcript as JSON `{'raw_text': '...'}` or as a file (`.txt`, `.pdf`, `.docx`)."
-)
-def submit_transcript(
-    request: HttpRequest,
-    meeting_id: int,
-    payload: Union[TranscriptSchemaIn, None] = Form(None),
-    file: UploadedFile = File(None)
-):
-    meeting = get_object_or_404(Meeting, id=meeting_id)
-    if Transcript.objects.filter(meeting=meeting).exists():
-        return 409, {"detail": f"Transcript already exists for meeting {meeting_id}."}
-
-    raw_text_content: Optional[str] = None
-    uploaded_file_object = None
-    if file and payload and payload.raw_text:
-        return 400, {"detail": "Provide either 'raw_text' in body OR a 'file', not both."}
-    if file:
-        uploaded_file_object = file
-        try:
-            max_size = 20 * 1024 * 1024
-            if file.size > max_size:
-                 logger.warning(f"File upload rejected (too large): {file.name}, size: {file.size}")
-                 return 413, {"detail": f"File size exceeds limit ({max_size // 1024 // 1024}MB)."}
-            logger.info(f"Attempting text extraction from file: {file.name}, type: {file.content_type}")
-            raw_text_content = extract_text(file)
-            logger.info(f"Text extracted successfully from: {file.name}")
-        except ValueError as e:
-            logger.error(f"Extraction failed for {file.name}: {e}", exc_info=True)
-            if "Unsupported file type" in str(e):
-                return 415, {"detail": str(e)}
-            else:
-                return 400, {"detail": f"Error processing file: {e}"}
-        except Exception as e:
-            logger.error(f"Unexpected error handling file {file.name}: {e}", exc_info=True)
-            return 500, {"detail": "An unexpected server error occurred while handling the file."}
-
-    elif payload and payload.raw_text:
-        raw_text_content = payload.raw_text
-        logger.info(f"Received raw text submission for meeting {meeting_id}")
-
-    else:
-        return 400, {"detail": "Please provide either 'raw_text' in the body or upload a 'file'."}
-
-    if not raw_text_content or len(raw_text_content.strip()) < 10:
-        logger.warning(f"Transcript text too short or empty for meeting {meeting_id}")
-        source = f"from file {file.name}" if file else "from raw text input"
-        return 400, {"detail": f"Transcript text is empty or too short (min 10 chars) {source}."}
-
+@router.post("/{meeting_id}/", response={201: TranscriptSchemaOut, 400: ErrorDetail, 404: ErrorDetail}, auth=JWTAuth())
+def create_transcript(request, meeting_id: int, data: TranscriptSchemaIn):
     try:
-        transcript = Transcript(
+        # Check if meeting exists
+        meeting = get_object_or_404(Meeting, id=meeting_id)
+
+        # Create transcript
+        transcript = Transcript.objects.create(
             meeting=meeting,
-            raw_text=raw_text_content,
+            raw_text=data.raw_text,
+            processing_status=Transcript.ProcessingStatus.PENDING
         )
-        if uploaded_file_object:
-            transcript.original_file = uploaded_file_object
-        transcript.save()
-        logger.info(f"Transcript record created: ID {transcript.id} for meeting {meeting_id}")
+
+        # Here you would typically trigger your async processing task
+        # Example: process_transcript_task.delay(transcript.id)
 
         return 201, transcript
-
+    except Meeting.DoesNotExist:
+        return 404, {"detail": f"Meeting with id {meeting_id} not found"}
     except Exception as e:
-        logger.error(f"Database error saving transcript for meeting {meeting_id}: {e}", exc_info=True)
-        return 500, {"detail": "An error occurred while saving the transcript."}
+        return 400, {"detail": str(e)}
 
 
-@router.get(
-    "/transcripts/{transcript_id}/status",
-    response={200: TranscriptStatusSchemaOut, 404: ErrorDetail},
-    summary="Get transcript processing status"
-)
-def get_transcript_status(request: HttpRequest, transcript_id: int):
-    """
-    Retrieves the current processing status of a specific transcript.
-    """
-    transcript = get_object_or_404(Transcript, id=transcript_id)
-    logger.debug(f"Fetching status for transcript {transcript_id}")
-    return 200, transcript
+@router.post("/{meeting_id}/upload/", response={201: TranscriptSchemaOut, 400: ErrorDetail, 404: ErrorDetail},
+             auth=JWTAuth())
+def upload_transcript_file(request, meeting_id: int, file: UploadedFile = File(...)):
+    try:
+        # Check if meeting exists
+        meeting = get_object_or_404(Meeting, id=meeting_id)
 
-@router.get(
-    "/transcripts/{transcript_id}",
-    response={200: TranscriptSchemaOut, 404: ErrorDetail},
-    summary="Get full transcript details"
-)
-def get_transcript_details(request: HttpRequest, transcript_id: int):
-    transcript = get_object_or_404(Transcript, id=transcript_id)
-    logger.debug(f"Fetching details for transcript {transcript_id}")
-    return 200, transcript
+        # Create transcript with file upload
+        transcript = Transcript.objects.create(
+            meeting=meeting,
+            original_file=file,
+            processing_status=Transcript.ProcessingStatus.PENDING
+        )
+
+        # Here you would typically trigger your async processing task
+        # Example: process_transcript_file_task.delay(transcript.id)
+
+        return 201, transcript
+    except Meeting.DoesNotExist:
+        return 404, {"detail": f"Meeting with id {meeting_id} not found"}
+    except Exception as e:
+        return 400, {"detail": str(e)}
+
+
+@router.get("/status/{transcript_id}/", response={200: TranscriptStatusSchemaOut, 404: ErrorDetail}, auth=JWTAuth())
+def get_transcript_status(request, transcript_id: int):
+    try:
+        transcript = get_object_or_404(Transcript, id=transcript_id)
+        return 200, transcript
+    except Transcript.DoesNotExist:
+        return 404, {"detail": f"Transcript with id {transcript_id} not found"}
+
+
+@router.get("/{transcript_id}/", response={200: TranscriptSchemaOut, 404: ErrorDetail}, auth=JWTAuth())
+def get_transcript(request, transcript_id: int):
+    try:
+        transcript = get_object_or_404(Transcript, id=transcript_id)
+        return 200, transcript
+    except Transcript.DoesNotExist:
+        return 404, {"detail": f"Transcript with id {transcript_id} not found"}
+
+
+@router.get("/meeting/{meeting_id}/", response=List[TranscriptSchemaOut], auth=JWTAuth())
+def get_meeting_transcripts(request, meeting_id: int):
+    return Transcript.objects.filter(meeting_id=meeting_id).order_by('-created_at')
