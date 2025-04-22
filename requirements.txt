@@ -13,3 +13,5 @@ streamlit
 pytest
 pytest-django
 gunicorn
+PyMuPDF
+python-docx
