@@ -13,10 +13,10 @@ class MeetingSchemaOut(Schema):
     updated_at: datetime
 
 class MeetingSchemaIn(Schema):
-    title: str = Field(..., min_length=3, max_length=255, description="The main title or subject of the meeting.")
-    meeting_date: Optional[datetime] = Field(None, description="Date and time of the meeting. Defaults to now if omitted.")
-    participants: Optional[List[Any]] = Field(None, description="Optional list of participants (e.g., names, emails).")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional dictionary for extra metadata.")
+    title: str = Field(..., min_length=3, max_length=255)
+    meeting_date: Optional[datetime] = Field(None)
+    participants: Optional[List[Any]] = Field(None)
+    metadata: Optional[Dict[str, Any]] = Field(None)
     @validator('title')
     def title_must_not_be_empty(cls, v):
         if not v.strip():
@@ -24,10 +24,10 @@ class MeetingSchemaIn(Schema):
         return v
 
 class MeetingSchemaUpdate(Schema):
-    title: Optional[str] = Field(None, min_length=3, max_length=255, description="The main title or subject of the meeting.")
-    meeting_date: Optional[datetime] = Field(None, description="Date and time of the meeting.")
-    participants: Optional[List[Any]] = Field(None, description="Optional list of participants (e.g., names, emails).")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional dictionary for extra metadata.")
+    title: Optional[str] = Field(None, min_length=3, max_length=255)
+    meeting_date: Optional[datetime] = Field(None)
+    participants: Optional[List[Any]] = Field(None)
+    metadata: Optional[Dict[str, Any]] = Field(None)
 
     @validator('title', pre=True, always=True)
     def title_must_not_be_empty_if_provided(cls, v):
