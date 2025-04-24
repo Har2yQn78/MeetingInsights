@@ -8,10 +8,9 @@ class AnalysisResult(models.Model):
     key_points = models.JSONField(default=list,blank=True,null=True,
                                   help_text="A list of key points extracted from the transcript,"
                                             " e.g., ['Point A', 'Point B'].")
-    action_items = models.JSONField(default=list,blank=True,null=True,
-                                    help_text=_("List of action items, e.g., [{'task': 'Send meeting notes',"
-                                                " 'responsible': 'Alice', 'deadline': 'YYYY-MM-DD'}]")
-    )
+    task = models.CharField(max_length=255, default="", blank=True)
+    responsible = models.CharField(max_length=255, blank=True, default="")
+    deadline = models.DateField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

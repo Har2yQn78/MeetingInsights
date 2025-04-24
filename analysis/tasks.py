@@ -1,7 +1,7 @@
 from celery import shared_task
 from transcripts.models import Transcript
 from .models import AnalysisResult
-from .service import GeminiAnalysisService
+from .service import TranscriptAnalysisService
 import asyncio
 import traceback
 
@@ -13,9 +13,9 @@ def generate_analysis_task(transcript_id):
         if transcript.processing_status != Transcript.ProcessingStatus.COMPLETED:
             return
         transcript_text = transcript.raw_text
-        gemini_service = GeminiAnalysisService()
+        LLM_service = TranscriptAnalysisService()
 
-        analysis_result = asyncio.run(gemini_service.analyze_transcript(transcript_text))
+        analysis_result = asyncio.run(LLM_service.analyze_transcript(transcript_text))
         analysis, created = AnalysisResult.objects.update_or_create(
             transcript=transcript,
             defaults={

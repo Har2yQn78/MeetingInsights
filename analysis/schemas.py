@@ -1,21 +1,17 @@
 from ninja import Schema
 from pydantic import Field
-from datetime import datetime
-from typing import Optional, List, Any
+from datetime import datetime, date
+from typing import Optional, List
 
-class ActionItemSchema(Schema):
-    task: str = Field(..., description="The description of the action item.")
-    responsible: Optional[str] = Field(None, description="The person or entity assigned the task.")
-    deadline: Optional[str] = Field(None,
-                                description="The deadline for the task (as text, e.g., 'YYYY-MM-DD' or 'Next Friday').")
 class AnalysisResultSchemaOut(Schema):
-    transcript_id: int = Field(...)
+    transcript_id: int = Field(..., description="The ID of the related transcript.")
     summary: Optional[str] = Field(None, description="The generated text summary of the transcript.")
     key_points: Optional[List[str]] = Field(None, description="A list of key points extracted from the transcript.")
-    action_items: Optional[List[ActionItemSchema]] = Field(None,
-                                        description="A list of structured action items extracted from the transcript.")
-    created_at: datetime = Field(...)
-    updated_at: datetime = Field(...)
+    task: str = Field(..., description="The task extracted from the transcript.")
+    responsible: Optional[str] = Field(None, description="The person or entity assigned to the task.")
+    deadline: Optional[date] = Field(None, description="The deadline for the task (format: YYYY-MM-DD).")
+    created_at: datetime = Field(..., description="The timestamp when the analysis was created.")
+    updated_at: datetime = Field(..., description="The timestamp when the analysis was last updated.")
 
 class ErrorDetail(Schema):
     detail: str

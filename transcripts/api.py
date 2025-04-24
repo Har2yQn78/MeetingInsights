@@ -1,4 +1,3 @@
-# transcripts/api.py
 from typing import List, Optional
 from django.shortcuts import get_object_or_404
 from django.db import transaction
@@ -9,7 +8,6 @@ from ninja_jwt.authentication import JWTAuth
 from .models import Transcript, Meeting
 from .schemas import TranscriptSchemaIn, TranscriptSchemaOut, TranscriptStatusSchemaOut, ErrorDetail
 
-# Create router for transcripts
 router = Router(tags=["transcripts"])
 
 

@@ -19,5 +19,5 @@ def get_transcript_analysis(request, transcript_id: int):
         return 404, {"detail": f"Analysis for transcript with id {transcript_id} not found"}
 
 @router.get("/meeting/{meeting_id}/", response=List[AnalysisResultSchemaOut], auth=JWTAuth())
-def get_meeting_analyses(request, meeting_id: int):
+def get_meeting_analysis(request, meeting_id: int):
     return AnalysisResult.objects.filter(transcript__meeting_id=meeting_id).order_by('-created_at')

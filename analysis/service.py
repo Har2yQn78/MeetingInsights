@@ -1,18 +1,19 @@
 import os
-import google.generativeai as genai
-from typing import Dict, List, Any, Optional
+import json
+from typing import Any, Dict
 from django.conf import settings
-from decouple import config, AutoConfig
+from decouple import config
+import openai
 
+OPENROUTER_API_KEY = config("OPENROUTER_API_KEY", cast=str)
+# OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", settings.OPENROUTER_API_KEY)
 
-GEMINI_API_KEY = config("GEMINI_API_KEY", cast=str)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", settings.GEMINI_API_KEY)
-genai.configure(api_key=GEMINI_API_KEY)
+openai.api_key = OPENROUTER_API_KEY
+openai.api_base = "https://openrouter.ai/api/v1"
 
-
-class GeminiAnalysisService:
-    def __init__(self, model_name="gemini-1.5-pro"):
-        self.model = genai.GenerativeModel(model_name)
+class TranscriptAnalysisService:
+    def __init__(self, model_name: str = "google/gemini-2.5-pro-exp-03-25:free"):
+        self.model = model_name
 
     async def analyze_transcript(self, transcript_text: str) -> Dict[str, Any]:
         prompt = f"""
@@ -25,9 +26,9 @@ class GeminiAnalysisService:
         {{
             "summary": "Summary text here...",
             "key_points": ["Point 1", "Point 2", ...],
-            "action_items": [
-                {{"task": "Task description", "responsible": "Person name", "deadline": "Date or timeframe"}}
-            ]
+            "task": "Describe the task here...",
+            "responsible": "Person or entity responsible...",
+            "deadline": "YYYY-MM-DD"
         }}
 
         Meeting Transcript:
@@ -35,27 +36,26 @@ class GeminiAnalysisService:
         """
 
         try:
-            response = await self.model.generate_content_async(prompt)
-            import json
-            content = response.text
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
+            response = await openai.ChatCompletion.acreate(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+            )
 
-            analysis_data = json.loads(content)
-            result = {
-                'summary': analysis_data.get('summary', ''),
-                'key_points': analysis_data.get('key_points', []),
-                'action_items': analysis_data.get('action_items', [])
+            content = response.choices[0].message["content"]
+            if content.strip().startswith("```"):
+                content = content.strip().lstrip("```json").rstrip("```").strip()
+
+            data = json.loads(content)
+
+            return {
+                "summary": data.get("summary", ""),
+                "key_points": data.get("key_points", []),
+                "action_items": data.get("action_items", []),
             }
 
-            return result
-
         except Exception as e:
-            print(f"Error analyzing transcript with Gemini: {str(e)}")
             return {
-                'summary': f"Error analyzing transcript: {str(e)}",
-                'key_points': [],
-                'action_items': []
+                "summary": f"Error analyzing transcript: {str(e)}",
+                "key_points": [],
+                "action_items": [],
             }

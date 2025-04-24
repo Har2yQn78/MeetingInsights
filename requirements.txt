@@ -15,5 +15,6 @@ pytest-django
 gunicorn
 PyMuPDF
 python-docx
-google-generativeai
 pyjwt
+openai
+dj_database_url

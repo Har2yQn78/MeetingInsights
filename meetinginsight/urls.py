@@ -16,7 +16,20 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
+from ninja import NinjaAPI
+
+api = NinjaAPI()
+
+from meetings.api import router as meetings_router
+from transcripts.api import router as transcripts_router
+from analysis.api import router as analysis_router
+
+
+api.add_router("/meetings/", meetings_router)
+api.add_router("/transcripts/", transcripts_router)
+api.add_router("/analysis/", analysis_router)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/', api.urls),
 ]
