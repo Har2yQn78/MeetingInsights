@@ -97,11 +97,9 @@ class TranscriptAnalysisService:
             return {
                 "summary": summary,
                 "key_points": key_points,
-                "action_items": {
-                    "task": task,
-                    "responsible": responsible,
-                    "deadline": deadline
-                }
+                "task": task,
+                "responsible": responsible,
+                "deadline": deadline
             }
 
         except json.JSONDecodeError as e:
