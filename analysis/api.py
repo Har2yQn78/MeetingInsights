@@ -1,12 +1,10 @@
-# analysis/api.py
-
 from typing import List, Optional
 from django.shortcuts import get_object_or_404
 from django.http import Http404
-from django.db import transaction # Keep transaction import
+from django.db import transaction
 from django.core.files.base import ContentFile
 from ninja import Router, File, UploadedFile, Form, Schema
-from asgiref.sync import sync_to_async # Keep sync_to_async
+from asgiref.sync import sync_to_async
 import logging
 
 from transcripts.models import Transcript
@@ -18,25 +16,20 @@ from .service import TranscriptAnalysisService
 router = Router(tags=["analysis"])
 logger = logging.getLogger(__name__)
 
-# --- Existing GET Endpoints and Helpers (Keep As Is) ---
-
 @router.get("/transcript/{transcript_id}/", response={200: AnalysisResultSchemaOut, 404: ErrorDetail})
-async def get_transcript_analysis(request, transcript_id: int): # Make async to use await inside
+async def get_transcript_analysis(request, transcript_id: int):
     try:
-        # Use sync_to_async for the database query if the view is async
         analysis = await sync_to_async(get_object_or_404)(
             AnalysisResult.objects.select_related('transcript', 'transcript__meeting'),
             transcript_id=transcript_id
         )
         return 200, analysis
     except AnalysisResult.DoesNotExist:
-        # Use await for the async check
         transcript_exists = await sync_to_async(Transcript.objects.filter(id=transcript_id).exists)()
         if transcript_exists:
              return 404, {"detail": f"Analysis for transcript {transcript_id} has not been generated yet."}
         else:
              return 404, {"detail": f"Transcript with id {transcript_id} not found."}
-    # Catch Http404 specifically if get_object_or_404 raises it (though DoesNotExist is more specific here)
     except Http404:
          return 404, {"detail": f"Transcript or Analysis with id {transcript_id} not found."}
     except Exception as e:
@@ -45,16 +38,12 @@ async def get_transcript_analysis(request, transcript_id: int): # Make async to 
 
 
 @router.get("/meeting/{meeting_id}/", response=List[AnalysisResultSchemaOut])
-async def get_meeting_analysis(request, meeting_id: int): # Make async
-    # Use sync_to_async for the query
-    results = await sync_to_async(list)(AnalysisResult.objects.filter(
-        transcript__meeting_id=meeting_id
-    ).select_related('transcript', 'transcript__meeting').order_by('-created_at'))
+async def get_meeting_analysis(request, meeting_id: int):
+    results = await sync_to_async(list)(AnalysisResult.objects.filter( transcript__meeting_id=meeting_id).
+                                        select_related('transcript', 'transcript__meeting').order_by('-created_at'))
     return results
 
-# --- Async Helper Functions ---
 
-# get_transcript_for_analysis is already using sync_to_async, so it's fine
 @sync_to_async
 def get_transcript_for_analysis(transcript_id: int) -> Optional[Transcript]:
     try:
@@ -65,7 +54,6 @@ def get_transcript_for_analysis(transcript_id: int) -> Optional[Transcript]:
         logger.error(f"Unexpected error fetching transcript {transcript_id}: {e}", exc_info=True)
         return None
 
-# update_or_create_analysis is already using sync_to_async, so it's fine
 @sync_to_async
 def update_or_create_analysis(transcript: Transcript, analysis_data: dict):
     if not isinstance(analysis_data, dict):
@@ -85,7 +73,6 @@ def update_or_create_analysis(transcript: Transcript, analysis_data: dict):
             'deadline': analysis_data.get('deadline'),
         }
         if defaults['key_points'] is None: defaults['key_points'] = []
-        # Ensure empty strings are used if model fields cannot be null but can be blank
         if defaults['task'] is None: defaults['task'] = ""
         if defaults['responsible'] is None: defaults['responsible'] = ""
 
@@ -96,9 +83,9 @@ def update_or_create_analysis(transcript: Transcript, analysis_data: dict):
         return analysis_result, created
     except Exception as e:
         logger.error(f"Error saving analysis result for transcript {transcript.id}: {e}", exc_info=True)
-        raise # Re-raise to be handled by the caller
+        raise
 
-# --- Generate Analysis Endpoint (Async) ---
+
 @router.post("/generate/{transcript_id}/", response={200: AnalysisResultSchemaOut, 400: ErrorDetail, 404: ErrorDetail, 500: ErrorDetail})
 async def generate_analysis(request, transcript_id: int):
     transcript = await get_transcript_for_analysis(transcript_id)
@@ -109,7 +96,6 @@ async def generate_analysis(request, transcript_id: int):
     if not transcript_text and transcript.original_file:
         logger.info(f"Reading transcript text from original file for transcript {transcript_id}")
         try:
-            # Reading from file might be blocking, wrap in sync_to_async
             def read_file_sync(file_field):
                 with file_field.open('r') as f:
                     return f.read()
@@ -126,12 +112,8 @@ async def generate_analysis(request, transcript_id: int):
         logger.info(f"Starting analysis generation task for transcript {transcript_id}...")
         llm_service = TranscriptAnalysisService()
         analysis_data_full = await llm_service.analyze_transcript(transcript_text)
-        analysis_result_data = analysis_data_full["analysis_results"] # Extract only analysis part
-
-        # Use the existing async helper
+        analysis_result_data = analysis_data_full["analysis_results"]
         analysis_db_object, created = await update_or_create_analysis(transcript, analysis_result_data)
-
-        # Update transcript status (wrap ORM update in sync_to_async)
         if transcript.processing_status != Transcript.ProcessingStatus.COMPLETED:
             await sync_to_async(Transcript.objects.filter(id=transcript_id).update)(
                  processing_status=Transcript.ProcessingStatus.COMPLETED,
@@ -149,7 +131,7 @@ async def generate_analysis(request, transcript_id: int):
              processing_error=f"Data processing error: {str(ve)}"
          )
          return 500, {"detail": f"Internal error processing analysis data: {str(ve)}"}
-    except RuntimeError as rte: # Catch runtime errors from the service
+    except RuntimeError as rte:
          logger.error(f"Runtime error during analysis service for transcript {transcript_id}: {rte}", exc_info=True)
          await sync_to_async(Transcript.objects.filter(id=transcript_id).update)(
              processing_status=Transcript.ProcessingStatus.FAILED,
@@ -158,38 +140,22 @@ async def generate_analysis(request, transcript_id: int):
          return 500, {"detail": f"Error during analysis service execution: {str(rte)}"}
     except Exception as e:
         logger.error(f"Error generating or saving analysis for transcript {transcript_id}: {e}", exc_info=True)
-        # Ensure transcript status is updated on unexpected errors too
         await sync_to_async(Transcript.objects.filter(id=transcript_id).update)(
              processing_status=Transcript.ProcessingStatus.FAILED,
              processing_error=f"Unexpected error: {str(e)}"
          )
         return 500, {"detail": f"An unexpected error occurred during analysis generation: {str(e)}"}
 
-
-# --- Helper function for the atomic creation logic ---
-# This function will contain the synchronous database operations
-def _create_meeting_transcript_analysis_sync(
-    meeting_details: dict,
-    analysis_results: dict,
-    transcript_text: str,
-    source_type: str,
-    original_filename: Optional[str] = None,
-    file_content: Optional[bytes] = None
-) -> AnalysisResult:
-    """
-    Performs the creation of Meeting, Transcript, and AnalysisResult
-    within a single database transaction. This function is synchronous.
-    """
+def _create_meeting_transcript_analysis_sync(meeting_details: dict, analysis_results: dict, transcript_text: str,
+                                             source_type: str, original_filename: Optional[str] = None,
+                                             file_content: Optional[bytes] = None) -> AnalysisResult:
     with transaction.atomic():
-        # 1. Create Meeting
         meeting = Meeting.objects.create(
             title=meeting_details["title"],
             meeting_date=meeting_details["meeting_date"],
             participants=meeting_details["participants"]
         )
         logger.info(f"SYNC: Created Meeting ID: {meeting.id} within transaction.")
-
-        # 2. Create Transcript
         transcript_data = {
             'meeting': meeting,
             'raw_text': transcript_text,
@@ -197,23 +163,15 @@ def _create_meeting_transcript_analysis_sync(
             'processing_error': None,
         }
         transcript = Transcript(**transcript_data)
-
-        # Handle file saving *before* saving the transcript instance if applicable
         if source_type == 'file' and file_content and original_filename:
-             # Use ContentFile to save bytes content to FileField
              transcript.original_file.save(
                  original_filename,
                  ContentFile(file_content),
-                 save=False # Save happens with transcript.save() below
+                 save=False
              )
              logger.info(f"SYNC: Attached original file '{original_filename}' to transcript.")
-
-        # Save the transcript instance (including the file if attached)
         transcript.save()
         logger.info(f"SYNC: Created Transcript ID: {transcript.id} for Meeting ID: {meeting.id} within transaction.")
-
-        # 3. Create Analysis Result
-        # Prepare defaults carefully
         analysis_defaults = {
             'summary': analysis_results.get('summary'),
             'key_points': analysis_results.get('key_points', []),
@@ -224,8 +182,6 @@ def _create_meeting_transcript_analysis_sync(
         if analysis_defaults['key_points'] is None: analysis_defaults['key_points'] = []
         if analysis_defaults['task'] is None: analysis_defaults['task'] = ""
         if analysis_defaults['responsible'] is None: analysis_defaults['responsible'] = ""
-
-        # Use update_or_create, although create() should suffice for a new transcript
         analysis_db_object, created = AnalysisResult.objects.update_or_create(
             transcript=transcript,
             defaults=analysis_defaults
@@ -235,9 +191,6 @@ def _create_meeting_transcript_analysis_sync(
 
         logger.info(f"SYNC: AnalysisResult for transcript {transcript.id} created within transaction.")
         return analysis_db_object
-
-
-# --- Direct Processing Endpoint (Modified) ---
 
 class DirectProcessInput(Schema):
     raw_text: Optional[str] = None
@@ -252,15 +205,12 @@ async def direct_process_transcript(request, payload: DirectProcessInput = Form(
     file_content = None
     original_filename = None
     source_type = None
-
-    # ... (same logic for getting transcript_text, file_content, etc. as before) ...
     if payload and payload.raw_text:
         transcript_text = payload.raw_text
         source_type = 'text'
         logger.info("Processing direct submission with raw text.")
     elif file:
         try:
-            # Use await file.read() as UploadedFile likely supports async reading
             file_content = await file.read()
             original_filename = file.name
             transcript_text = file_content.decode('utf-8', errors='replace')
@@ -279,21 +229,16 @@ async def direct_process_transcript(request, payload: DirectProcessInput = Form(
 
 
     try:
-        # 1. Call LLM Service (async)
         llm_service = TranscriptAnalysisService()
         logger.info("Calling LLM service for direct analysis...")
         extracted_data = await llm_service.analyze_transcript(transcript_text)
         logger.info("LLM service call completed.")
-
         meeting_details = extracted_data["meeting_details"]
         analysis_results = extracted_data["analysis_results"]
-
-        # 2. Perform DB operations within a transaction (using sync_to_async)
-        # Wrap the synchronous helper function
         logger.info("Executing database operations within transaction...")
         final_analysis_object = await sync_to_async(
             _create_meeting_transcript_analysis_sync,
-            thread_sensitive=True # Important for transactions
+            thread_sensitive=True
         )(
             meeting_details=meeting_details,
             analysis_results=analysis_results,
@@ -303,24 +248,20 @@ async def direct_process_transcript(request, payload: DirectProcessInput = Form(
             file_content=file_content
         )
         logger.info(f"Database operations complete. Final Analysis Object ID: {final_analysis_object.pk if final_analysis_object else 'N/A'}") # Use pk
-
-        # Check if object creation was successful
         if final_analysis_object is None:
              logger.error("Database operations failed to return the analysis object.")
              return 500, {"detail": "Failed to save analysis results after processing."}
 
 
         logger.info(f"Direct processing successful. Returning analysis for Transcript ID: {final_analysis_object.transcript_id}")
-        # Return the object fetched (or created) inside the sync function
         return 200, final_analysis_object
 
-    except (ValueError, TypeError) as ve: # Catch specific errors from service/parsing/saving logic
+    except (ValueError, TypeError) as ve:
          logger.error(f"Data format or value error during direct processing: {ve}", exc_info=True)
          return 500, {"detail": f"Error processing transcript data: {str(ve)}"}
-    except RuntimeError as rte: # Catch runtime errors from the service (e.g., LLM issues)
+    except RuntimeError as rte:
          logger.error(f"Runtime error during direct processing (likely LLM issue): {rte}", exc_info=True)
          return 500, {"detail": f"Error during analysis service execution: {str(rte)}"}
     except Exception as e:
-        # Catch unexpected errors during the process or transaction commit
         logger.error(f"Unexpected error during direct processing: {e}", exc_info=True)
         return 500, {"detail": f"An unexpected internal error occurred: {str(e)}"}

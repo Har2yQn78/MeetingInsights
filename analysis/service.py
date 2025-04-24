@@ -2,26 +2,21 @@ import os
 import json
 import logging
 from typing import Any, Dict, Optional
-from datetime import datetime, date, timedelta # Added date, timedelta
+from datetime import datetime, date, timedelta
 from django.conf import settings
 from decouple import config, AutoConfig
 from openai import AsyncOpenAI
-from dateutil.parser import parse as dateutil_parse # Import dateutil parser
+from dateutil.parser import parse as dateutil_parse
 
 logger = logging.getLogger(__name__)
 
-# Ensure decouple finds your .env file (adjust path if needed)
-# config = AutoConfig(search_path=os.path.join(settings.BASE_DIR, '..')) # Example if .env is one level up
-config = AutoConfig(search_path="/home/harry/meetinginsight") # Keep your original path
+config = AutoConfig(search_path="/home/harry/meetinginsight")
 OPENROUTER_API_KEY = config("OPENROUTER_API_KEY", default=None)
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
 if not OPENROUTER_API_KEY:
     logger.error("OPENROUTER_API_KEY not found. Please set it in your .env file or environment variables.")
-    # Consider raising an error here or handling it differently if the key is absolutely required at startup
-    # raise ValueError("OPENROUTER_API_KEY is not configured.")
 
-# Initialize client, handle potential missing key
 client = None
 if OPENROUTER_API_KEY:
     client = AsyncOpenAI(
@@ -37,16 +32,12 @@ class TranscriptAnalysisService:
         self.model = model_name
 
     def _parse_relative_date(self, date_str: Optional[str], reference_date: date) -> Optional[date]:
-        """Attempts to parse various date formats, including relative dates."""
         if not date_str:
             return None
         try:
-            # Try standard YYYY-MM-DD first
             return datetime.strptime(date_str, "%Y-%m-%d").date()
         except (ValueError, TypeError):
             try:
-                # Use dateutil.parser for more complex/relative dates
-                # Pass default=reference_date to handle cases like "today" correctly
                 dt = dateutil_parse(date_str, default=datetime.combine(reference_date, datetime.min.time()))
                 return dt.date()
             except (ValueError, TypeError, OverflowError) as e:
@@ -54,19 +45,6 @@ class TranscriptAnalysisService:
                 return None
 
     async def analyze_transcript(self, transcript_text: str) -> Dict[str, Any]:
-        """
-        Analyzes transcript text to extract meeting details and analysis results.
-
-        Returns:
-            A dictionary containing structured meeting details and analysis.
-            Example:
-            {
-                "meeting_details": { "title": ..., "meeting_date": ..., "participants": ... },
-                "analysis_results": { "summary": ..., "key_points": ..., "task": ..., "responsible": ..., "deadline": ... }
-            }
-        Raises:
-            ValueError: If API key is missing, LLM response is invalid, or parsing fails critically.
-        """
         if not client:
              logger.error("Cannot analyze transcript: OpenRouter client is not initialized (API key missing?).")
              raise ValueError("OpenAI API key is not configured or client initialization failed.")
@@ -110,7 +88,7 @@ class TranscriptAnalysisService:
             response = await client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                response_format={ "type": "json_object" } # Request JSON output
+                response_format={ "type": "json_object" }
             )
 
             content = response.choices[0].message.content
@@ -121,10 +99,8 @@ class TranscriptAnalysisService:
                  raise ValueError("LLM returned empty content.")
 
             try:
-                # Attempt to parse the JSON directly
                 data = json.loads(content)
             except json.JSONDecodeError:
-                 # Attempt common cleanup (e.g., removing ```json ... ```)
                  logger.warning("LLM response was not valid JSON despite requesting JSON format. Attempting cleanup.")
                  if content.strip().startswith("```") and content.strip().endswith("```"):
                       cleaned_content = content.strip().lstrip("```json").rstrip("```").strip()
@@ -137,8 +113,6 @@ class TranscriptAnalysisService:
                       logger.error(f"Failed to parse LLM response as JSON. Response: {content}")
                       raise ValueError(f"LLM returned non-JSON data: {content[:100]}...")
 
-
-            # --- Extract and Validate Meeting Details ---
             extracted_title = data.get("meeting_title")
             extracted_date_str = data.get("meeting_date_extracted")
             extracted_participants = data.get("participants_extracted", [])
@@ -153,11 +127,10 @@ class TranscriptAnalysisService:
 
             meeting_details = {
                 "title": extracted_title or f"Meeting Analysis {today.strftime('%Y%m%d_%H%M%S')}",
-                "meeting_date": parsed_meeting_date or today, # Default to today if not found/parsed
-                "participants": extracted_participants or None, # Use None if list is empty
+                "meeting_date": parsed_meeting_date or today,
+                "participants": extracted_participants or None,
             }
 
-            # --- Extract and Validate Analysis Results ---
             analysis_summary = data.get("summary")
             analysis_key_points = data.get("key_points", [])
             analysis_task = data.get("task")
@@ -167,7 +140,6 @@ class TranscriptAnalysisService:
             if not isinstance(analysis_key_points, list):
                  logger.warning(f"Key points field was not a list, defaulting to empty. Value: {analysis_key_points}")
                  analysis_key_points = []
-            # Ensure other fields are strings or None
             analysis_summary = str(analysis_summary) if analysis_summary is not None else None
             analysis_task = str(analysis_task) if analysis_task is not None else None
             analysis_responsible = str(analysis_responsible) if analysis_responsible is not None else None
@@ -180,7 +152,7 @@ class TranscriptAnalysisService:
                 "key_points": analysis_key_points,
                 "task": analysis_task,
                 "responsible": analysis_responsible,
-                "deadline": parsed_deadline, # This is now a date object or None
+                "deadline": parsed_deadline,
             }
 
             return {
@@ -193,5 +165,4 @@ class TranscriptAnalysisService:
              raise ValueError(f"Failed to parse analysis result from LLM: {e}") from e
         except Exception as e:
             logger.error(f"Error during transcript analysis with model {self.model}: {e}", exc_info=True)
-            # Re-raise a more specific or generic error depending on desired API behavior
             raise RuntimeError(f"An unexpected error occurred during transcript analysis: {e}") from e
