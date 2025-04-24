@@ -1,48 +1,101 @@
 import os
 import json
-import logging # Import logging
-from typing import Any, Dict
+import logging
+from typing import Any, Dict, Optional
+from datetime import datetime, date, timedelta # Added date, timedelta
 from django.conf import settings
 from decouple import config, AutoConfig
 from openai import AsyncOpenAI
+from dateutil.parser import parse as dateutil_parse # Import dateutil parser
 
 logger = logging.getLogger(__name__)
 
-config = AutoConfig(search_path="/home/harry/meetinginsight")
-OPENROUTER_API_KEY = config("OPENROUTER_API_KEY", cast=str)
+# Ensure decouple finds your .env file (adjust path if needed)
+# config = AutoConfig(search_path=os.path.join(settings.BASE_DIR, '..')) # Example if .env is one level up
+config = AutoConfig(search_path="/home/harry/meetinginsight") # Keep your original path
+OPENROUTER_API_KEY = config("OPENROUTER_API_KEY", default=None)
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
 if not OPENROUTER_API_KEY:
     logger.error("OPENROUTER_API_KEY not found. Please set it in your .env file or environment variables.")
+    # Consider raising an error here or handling it differently if the key is absolutely required at startup
+    # raise ValueError("OPENROUTER_API_KEY is not configured.")
 
-client = AsyncOpenAI(
-    api_key=OPENROUTER_API_KEY,
-    base_url=OPENROUTER_API_BASE,
-)
+# Initialize client, handle potential missing key
+client = None
+if OPENROUTER_API_KEY:
+    client = AsyncOpenAI(
+        api_key=OPENROUTER_API_KEY,
+        base_url=OPENROUTER_API_BASE,
+    )
+else:
+    logger.warning("OpenRouter client not initialized because OPENROUTER_API_KEY is missing.")
+
 
 class TranscriptAnalysisService:
     def __init__(self, model_name: str = "google/gemma-3-12b-it:free"):
         self.model = model_name
 
-    async def analyze_transcript(self, transcript_text: str) -> Dict[str, Any]:
-        if not OPENROUTER_API_KEY:
-             logger.error("Cannot analyze transcript: OPENROUTER_API_KEY is missing.")
-             raise ValueError("OpenAI API key is not configured.")
+    def _parse_relative_date(self, date_str: Optional[str], reference_date: date) -> Optional[date]:
+        """Attempts to parse various date formats, including relative dates."""
+        if not date_str:
+            return None
+        try:
+            # Try standard YYYY-MM-DD first
+            return datetime.strptime(date_str, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            try:
+                # Use dateutil.parser for more complex/relative dates
+                # Pass default=reference_date to handle cases like "today" correctly
+                dt = dateutil_parse(date_str, default=datetime.combine(reference_date, datetime.min.time()))
+                return dt.date()
+            except (ValueError, TypeError, OverflowError) as e:
+                logger.warning(f"Could not parse date string '{date_str}' using dateutil: {e}")
+                return None
 
+    async def analyze_transcript(self, transcript_text: str) -> Dict[str, Any]:
+        """
+        Analyzes transcript text to extract meeting details and analysis results.
+
+        Returns:
+            A dictionary containing structured meeting details and analysis.
+            Example:
+            {
+                "meeting_details": { "title": ..., "meeting_date": ..., "participants": ... },
+                "analysis_results": { "summary": ..., "key_points": ..., "task": ..., "responsible": ..., "deadline": ... }
+            }
+        Raises:
+            ValueError: If API key is missing, LLM response is invalid, or parsing fails critically.
+        """
+        if not client:
+             logger.error("Cannot analyze transcript: OpenRouter client is not initialized (API key missing?).")
+             raise ValueError("OpenAI API key is not configured or client initialization failed.")
+
+        today = datetime.now().date()
         prompt = f"""
-        Analyze the following meeting transcript and provide:
-        1. A concise summary (2-3 paragraphs)
-        2. 5-7 key points discussed in the meeting
-        3. Action items, including task description, responsible person/entity, and deadline (if mentioned). If multiple action items exist, list them or summarize the primary ones clearly within the 'task' field or add an 'action_items_list' field.
+        Analyze the following meeting transcript. Extract the following information:
+        1. Meeting Title: Infer a concise title based on the main topic. If no clear topic, use null.
+        2. Meeting Date: Extract the date the meeting took place. Use YYYY-MM-DD format. Handle relative dates like 'today', 'yesterday', 'last Tuesday', 'January 15th'. If not mentioned, use null.
+        3. Participants: List the names of people mentioned as attending or speaking. If none mentioned, use an empty list [].
+        4. Summary: Provide a concise summary of the discussion (2-3 paragraphs).
+        5. Key Points: List 5-7 key discussion points or decisions as strings.
+        6. Action Item - Task: Describe the main action item or task identified. If multiple, summarize the primary one or list them concisely here. If none, use null.
+        7. Action Item - Responsible: Identify the person or entity assigned to the task. If not mentioned or not applicable, use null.
+        8. Action Item - Deadline: Extract the deadline for the task. Use YYYY-MM-DD format. Handle relative dates like 'next Friday', 'in two weeks', 'end of month'. If not specified, use null.
 
         Format the output STRICTLY as JSON with the following structure:
         {{
-            "summary": "String summary text here...",
+            "meeting_title": "String title or null",
+            "meeting_date_extracted": "YYYY-MM-DD string or null",
+            "participants_extracted": ["Participant Name 1", "Participant Name 2"],
+            "summary": "String summary text...",
             "key_points": ["List", "of", "string", "key points"],
-            "task": "String describing the main task or a summary of tasks...",
-            "responsible": "String identifying the person or entity responsible...",
-            "deadline": "String in YYYY-MM-DD format or null/empty string if not specified"
+            "task": "String task description or null",
+            "responsible": "String responsible name or null",
+            "deadline": "YYYY-MM-DD string or null"
         }}
+
+        Reference Date for relative dates: {today.strftime('%Y-%m-%d %A')}
 
         Meeting Transcript:
         ---
@@ -53,59 +106,92 @@ class TranscriptAnalysisService:
         """
 
         try:
-            logger.info(f"Sending request to OpenRouter model: {self.model}")
+            logger.info(f"Sending request to OpenRouter model: {self.model} for transcript analysis")
             response = await client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                response_format={ "type": "json_object" }
+                response_format={ "type": "json_object" } # Request JSON output
             )
 
             content = response.choices[0].message.content
             logger.debug(f"Raw response content from LLM: {content}")
-            if content:
-                if content.strip().startswith("{") and content.strip().endswith("}"):
-                   data = json.loads(content)
-                else:
-                    logger.warning("LLM response was not valid JSON despite requesting JSON format. Attempting manual extraction or returning error.")
-                    try:
-                        if content.strip().startswith("```"):
-                             cleaned_content = content.strip().lstrip("```json").rstrip("```").strip()
-                             data = json.loads(cleaned_content)
-                        else:
-                             raise json.JSONDecodeError("Response is not JSON", content, 0)
-                    except json.JSONDecodeError as json_e:
-                        logger.error(f"Failed to parse LLM response as JSON: {json_e}. Response: {content}")
-                        raise ValueError(f"LLM returned non-JSON data: {content[:100]}...")
-            else:
+
+            if not content:
                  logger.error("Received empty content from LLM.")
                  raise ValueError("LLM returned empty content.")
-            summary = data.get("summary", "")
-            key_points = data.get("key_points", [])
-            task = data.get("task", "")
-            responsible = data.get("responsible", "")
-            deadline = data.get("deadline")
 
-            if not isinstance(key_points, list): key_points = []
-            if not isinstance(summary, str): summary = str(summary)
-            if not isinstance(task, str): task = str(task)
-            if not isinstance(responsible, str): responsible = str(responsible)
-            if deadline is not None and not isinstance(deadline, str):
-                deadline = str(deadline)
-            elif deadline == "":
-                deadline = None
+            try:
+                # Attempt to parse the JSON directly
+                data = json.loads(content)
+            except json.JSONDecodeError:
+                 # Attempt common cleanup (e.g., removing ```json ... ```)
+                 logger.warning("LLM response was not valid JSON despite requesting JSON format. Attempting cleanup.")
+                 if content.strip().startswith("```") and content.strip().endswith("```"):
+                      cleaned_content = content.strip().lstrip("```json").rstrip("```").strip()
+                      try:
+                           data = json.loads(cleaned_content)
+                      except json.JSONDecodeError as json_e_clean:
+                           logger.error(f"Failed to parse LLM response as JSON even after cleanup: {json_e_clean}. Response: {content}")
+                           raise ValueError(f"LLM returned non-JSON data after cleanup attempt: {content[:100]}...")
+                 else:
+                      logger.error(f"Failed to parse LLM response as JSON. Response: {content}")
+                      raise ValueError(f"LLM returned non-JSON data: {content[:100]}...")
+
+
+            # --- Extract and Validate Meeting Details ---
+            extracted_title = data.get("meeting_title")
+            extracted_date_str = data.get("meeting_date_extracted")
+            extracted_participants = data.get("participants_extracted", [])
+
+            if not isinstance(extracted_participants, list):
+                logger.warning(f"Participants field was not a list, defaulting to empty. Value: {extracted_participants}")
+                extracted_participants = []
+            if extracted_title is not None and not isinstance(extracted_title, str):
+                 extracted_title = str(extracted_title)
+
+            parsed_meeting_date = self._parse_relative_date(extracted_date_str, today)
+
+            meeting_details = {
+                "title": extracted_title or f"Meeting Analysis {today.strftime('%Y%m%d_%H%M%S')}",
+                "meeting_date": parsed_meeting_date or today, # Default to today if not found/parsed
+                "participants": extracted_participants or None, # Use None if list is empty
+            }
+
+            # --- Extract and Validate Analysis Results ---
+            analysis_summary = data.get("summary")
+            analysis_key_points = data.get("key_points", [])
+            analysis_task = data.get("task")
+            analysis_responsible = data.get("responsible")
+            analysis_deadline_str = data.get("deadline")
+
+            if not isinstance(analysis_key_points, list):
+                 logger.warning(f"Key points field was not a list, defaulting to empty. Value: {analysis_key_points}")
+                 analysis_key_points = []
+            # Ensure other fields are strings or None
+            analysis_summary = str(analysis_summary) if analysis_summary is not None else None
+            analysis_task = str(analysis_task) if analysis_task is not None else None
+            analysis_responsible = str(analysis_responsible) if analysis_responsible is not None else None
+
+
+            parsed_deadline = self._parse_relative_date(analysis_deadline_str, today)
+
+            analysis_results = {
+                "summary": analysis_summary,
+                "key_points": analysis_key_points,
+                "task": analysis_task,
+                "responsible": analysis_responsible,
+                "deadline": parsed_deadline, # This is now a date object or None
+            }
 
             return {
-                "summary": summary,
-                "key_points": key_points,
-                "task": task,
-                "responsible": responsible,
-                "deadline": deadline
+                "meeting_details": meeting_details,
+                "analysis_results": analysis_results,
             }
 
         except json.JSONDecodeError as e:
              logger.error(f"JSON Decode Error analyzing transcript: {e}. Content was: {content}", exc_info=True)
              raise ValueError(f"Failed to parse analysis result from LLM: {e}") from e
         except Exception as e:
-
-            logger.error(f"Error analyzing transcript with model {self.model}: {e}", exc_info=True)
-            raise
+            logger.error(f"Error during transcript analysis with model {self.model}: {e}", exc_info=True)
+            # Re-raise a more specific or generic error depending on desired API behavior
+            raise RuntimeError(f"An unexpected error occurred during transcript analysis: {e}") from e
