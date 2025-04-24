@@ -18,3 +18,5 @@ python-docx
 pyjwt
 openai
 dj_database_url
+streamlit
+requests
