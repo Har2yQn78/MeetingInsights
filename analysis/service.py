@@ -2,9 +2,10 @@ import os
 import json
 from typing import Any, Dict
 from django.conf import settings
-from decouple import config
+from decouple import config, AutoConfig
 import openai
 
+config = AutoConfig(search_path="/home/harry/meetinginsight")
 OPENROUTER_API_KEY = config("OPENROUTER_API_KEY", cast=str)
 # OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", settings.OPENROUTER_API_KEY)
 
@@ -47,15 +48,24 @@ class TranscriptAnalysisService:
 
             data = json.loads(content)
 
+            # Format the response to match the expected structure in our API
             return {
                 "summary": data.get("summary", ""),
                 "key_points": data.get("key_points", []),
-                "action_items": data.get("action_items", []),
+                "action_items": {
+                    "task": data.get("task", ""),
+                    "responsible": data.get("responsible", ""),
+                    "deadline": data.get("deadline", None)
+                }
             }
 
         except Exception as e:
             return {
                 "summary": f"Error analyzing transcript: {str(e)}",
                 "key_points": [],
-                "action_items": [],
+                "action_items": {
+                    "task": "",
+                    "responsible": "",
+                    "deadline": None
+                }
             }

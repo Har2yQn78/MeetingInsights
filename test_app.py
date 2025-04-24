@@ -296,8 +296,10 @@ if ensure_authenticated():
 
     # --- 3. Analysis ---
     st.header("3. Analysis Results")
+
+    # Updated note to reflect the new direct analysis feature
     st.info(
-        "Note: Analysis is asynchronous. It might take some time after submitting a transcript for the analysis to be available.")
+        "You can now generate transcript analysis directly instead of waiting for asynchronous processing.")
 
     # Get Analysis for a single Transcript
     st.subheader("Get Analysis by Transcript ID")
@@ -309,17 +311,36 @@ if ensure_authenticated():
         step=1,
         key="analysis_check_tid"
     )
-    if st.button("Get Transcript Analysis"):
-        if transcript_id_for_analysis:
-            endpoint = f"/analysis/transcript/{transcript_id_for_analysis}/"
-            with st.spinner(f"Fetching analysis for transcript {transcript_id_for_analysis}..."):
-                result = make_request("GET", endpoint)
-                if result:
-                    st.success(f"Analysis for Transcript {transcript_id_for_analysis}:")
-                    st.json(result)
-                else:
-                    st.warning(
-                        f"Could not retrieve analysis for transcript {transcript_id_for_analysis}. It might still be processing or not exist.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("Get Transcript Analysis"):
+            if transcript_id_for_analysis:
+                endpoint = f"/analysis/transcript/{transcript_id_for_analysis}/"
+                with st.spinner(f"Fetching analysis for transcript {transcript_id_for_analysis}..."):
+                    result = make_request("GET", endpoint)
+                    if result:
+                        st.success(f"Analysis for Transcript {transcript_id_for_analysis}:")
+                        st.json(result)
+                    else:
+                        st.warning(
+                            f"Could not retrieve analysis for transcript {transcript_id_for_analysis}. It might not exist yet.")
+
+    with col2:
+        # New feature: Generate Analysis Directly
+        if st.button("Generate Analysis Now"):
+            if transcript_id_for_analysis:
+                endpoint = f"/analysis/generate/{transcript_id_for_analysis}/"
+                with st.spinner(
+                        f"Generating analysis for transcript {transcript_id_for_analysis}... This may take a moment."):
+                    result = make_request("POST", endpoint)
+                    if result:
+                        st.success(f"Analysis generated successfully for Transcript {transcript_id_for_analysis}:")
+                        st.json(result)
+                    else:
+                        st.error(
+                            f"Failed to generate analysis for transcript {transcript_id_for_analysis}. Check the transcript status.")
 
     # Get Analyses for a Meeting
     st.subheader("Get All Analyses for a Meeting")

@@ -13,5 +13,8 @@ class AnalysisResultSchemaOut(Schema):
     created_at: datetime = Field(..., description="The timestamp when the analysis was created.")
     updated_at: datetime = Field(..., description="The timestamp when the analysis was last updated.")
 
+class AnalysisCreateSchema(Schema):
+    transcript_id: int
+
 class ErrorDetail(Schema):
     detail: str
