@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio # <--- ADD THIS IMPORT
 from typing import Any, Dict, Optional
 from datetime import datetime, date, timedelta
 from django.conf import settings
@@ -84,7 +85,7 @@ class TranscriptAnalysisService:
         """
 
         try:
-            logger.info(f"Sending request to OpenRouter model: {self.model} for transcript analysis")
+            logger.info(f"Sending request to OpenRouter model: {self.model} for transcript analysis (async call)")
             response = await client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
@@ -103,32 +104,31 @@ class TranscriptAnalysisService:
             except json.JSONDecodeError:
                  logger.warning("LLM response was not valid JSON despite requesting JSON format. Attempting cleanup.")
                  if content.strip().startswith("```") and content.strip().endswith("```"):
-                      cleaned_content = content.strip().lstrip("```json").rstrip("```").strip()
+                      cleaned_content = content.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
                       try:
                            data = json.loads(cleaned_content)
+                           logger.info("Successfully parsed JSON after cleanup.")
                       except json.JSONDecodeError as json_e_clean:
-                           logger.error(f"Failed to parse LLM response as JSON even after cleanup: {json_e_clean}. Response: {content}")
-                           raise ValueError(f"LLM returned non-JSON data after cleanup attempt: {content[:100]}...")
+                           logger.error(f"Failed to parse LLM response as JSON even after cleanup: {json_e_clean}. Response: {content[:500]}...")
+                           raise ValueError(f"LLM returned non-JSON data after cleanup attempt.")
                  else:
-                      logger.error(f"Failed to parse LLM response as JSON. Response: {content}")
-                      raise ValueError(f"LLM returned non-JSON data: {content[:100]}...")
+                      logger.error(f"Failed to parse LLM response as JSON and cleanup markers not found. Response: {content[:500]}...")
+                      raise ValueError(f"LLM returned non-JSON data.")
 
             extracted_title = data.get("meeting_title")
             extracted_date_str = data.get("meeting_date_extracted")
             extracted_participants = data.get("participants_extracted", [])
-
             if not isinstance(extracted_participants, list):
                 logger.warning(f"Participants field was not a list, defaulting to empty. Value: {extracted_participants}")
                 extracted_participants = []
-            if extracted_title is not None and not isinstance(extracted_title, str):
-                 extracted_title = str(extracted_title)
+            if extracted_title is not None and not isinstance(extracted_title, str): extracted_title = str(extracted_title)
 
             parsed_meeting_date = self._parse_relative_date(extracted_date_str, today)
 
             meeting_details = {
                 "title": extracted_title or f"Meeting Analysis {today.strftime('%Y%m%d_%H%M%S')}",
                 "meeting_date": parsed_meeting_date or today,
-                "participants": extracted_participants or None,
+                "participants": extracted_participants, # Keep as list
             }
 
             analysis_summary = data.get("summary")
@@ -143,7 +143,6 @@ class TranscriptAnalysisService:
             analysis_summary = str(analysis_summary) if analysis_summary is not None else None
             analysis_task = str(analysis_task) if analysis_task is not None else None
             analysis_responsible = str(analysis_responsible) if analysis_responsible is not None else None
-
 
             parsed_deadline = self._parse_relative_date(analysis_deadline_str, today)
 
@@ -161,8 +160,19 @@ class TranscriptAnalysisService:
             }
 
         except json.JSONDecodeError as e:
-             logger.error(f"JSON Decode Error analyzing transcript: {e}. Content was: {content}", exc_info=True)
+             logged_content = content[:500] + "..." if 'content' in locals() else "Content unavailable"
+             logger.error(f"JSON Decode Error analyzing transcript: {e}. Content was: {logged_content}", exc_info=True)
              raise ValueError(f"Failed to parse analysis result from LLM: {e}") from e
         except Exception as e:
             logger.error(f"Error during transcript analysis with model {self.model}: {e}", exc_info=True)
             raise RuntimeError(f"An unexpected error occurred during transcript analysis: {e}") from e
+
+    def analyze_transcript_sync(self, transcript_text: str) -> Dict[str, Any]:
+        logger.info("Running analyze_transcript asynchronously via sync wrapper...")
+        try:
+            result = asyncio.run(self.analyze_transcript(transcript_text))
+            logger.info("Async analysis completed successfully via sync wrapper.")
+            return result
+        except Exception as e:
+             logger.error(f"Error executing async analysis via sync wrapper: {e}", exc_info=True)
+             raise e

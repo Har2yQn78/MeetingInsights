@@ -8,7 +8,7 @@ class Meeting(models.Model):
     title = models.CharField(max_length=255, blank=False, null=False,)
     meeting_date = models.DateTimeField(default=timezone.now, db_index=True)
     participants = models.JSONField(default=list, blank=True, null=True)
-    metadata = models.JSONField(default=dict, blank=True, null=True)  # Added metadata field
+    metadata = models.JSONField(default=dict, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True,)
     updated_at = models.DateTimeField(auto_now=True)
 

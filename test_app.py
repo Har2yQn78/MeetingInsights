@@ -1,9 +1,11 @@
 import streamlit as st
 import requests
 import json
+import time
 from datetime import datetime, timedelta
+from typing import Optional, List, Any
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_title="Meeting Analysis")
 
 API_BASE_URL = st.sidebar.text_input("API Base URL", "http://127.0.0.1:8000/api")
 
@@ -17,17 +19,23 @@ def login(username, password):
         token_data = response.json()
         st.session_state.access_token = token_data["access"]
         st.session_state.refresh_token = token_data["refresh"]
-        st.session_state.token_expiry = datetime.now() + timedelta(minutes=4)
+        st.session_state.token_expiry = datetime.now() + timedelta(hours=5)
+        st.session_state.logged_in = True
+        st.session_state.username = username
         return True
     except requests.exceptions.RequestException as e:
         st.error(f"Login failed: {str(e)}")
         if hasattr(e, 'response') and e.response is not None:
             try:
-                st.error(e.response.json().get("detail", "Unknown error"))
+                error_detail = e.response.json().get("detail", "Unknown error")
+                st.error(f"API Error: {error_detail}")
             except json.JSONDecodeError:
-                 st.error(f"Status {e.response.status_code}: {e.response.text}")
+                 st.error(f"API Error: Status {e.response.status_code} - {e.response.text}")
+        st.session_state.logged_in = False
+        if 'access_token' in st.session_state: del st.session_state.access_token
+        if 'refresh_token' in st.session_state: del st.session_state.refresh_token
+        if 'token_expiry' in st.session_state: del st.session_state.token_expiry
         return False
-
 
 def refresh_token():
     if 'refresh_token' not in st.session_state:
@@ -42,96 +50,96 @@ def refresh_token():
         response.raise_for_status()
         token_data = response.json()
         st.session_state.access_token = token_data["access"]
-        st.session_state.token_expiry = datetime.now() + timedelta(minutes=4)
+        st.session_state.token_expiry = datetime.now() + timedelta(hours=5)
+        st.session_state.logged_in = True
         return True
     except requests.exceptions.RequestException as e:
-        st.warning("Your session may have expired. Please log in again.")
+        st.warning("Session expired or token invalid. Please log in again.")
         st.error(f"Token refresh failed: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None and e.response.status_code == 401:
+             st.error("Reason: Refresh token is invalid or has expired.")
         logout()
         return False
 
-def verify_token():
-    if 'access_token' not in st.session_state: return False
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/token/verify",
-            json={"token": st.session_state.access_token}
-        )
-        return response.status_code == 200
-    except requests.exceptions.RequestException:
-        return False
-
-
 def logout():
-    keys_to_remove = [
-        'access_token', 'refresh_token', 'token_expiry', 'username',
-        'history_meetings_list', 'selected_meeting_id_history',
-        'selected_meeting_analyses'
-    ]
+    keys_to_remove = list(st.session_state.keys())
+    st.info("Logging out...")
     for key in keys_to_remove:
-        if key in st.session_state:
-            del st.session_state[key]
-    st.success("Logged out.")
-
+        del st.session_state[key]
 
 def ensure_authenticated():
-    if 'access_token' not in st.session_state:
+    if not st.session_state.get('logged_in', False) or 'access_token' not in st.session_state:
         return False
-    if 'token_expiry' not in st.session_state or datetime.now() >= (st.session_state.token_expiry - timedelta(seconds=30)):
-        if not refresh_token():
-            return False
-    return True
 
+    if 'token_expiry' not in st.session_state or datetime.now() >= (st.session_state.token_expiry - timedelta(seconds=15)):
+        st.info("Access token nearing expiry or expired, attempting refresh...")
+        if not refresh_token():
+            st.warning("Session expired. Please log in again.")
+            return False
+        else:
+            st.info("Token refreshed successfully.")
+    return True
 
 def get_headers(include_content_type=True):
     if 'access_token' not in st.session_state:
-         st.error("Authentication token missing unexpectedly.")
-         st.stop()
+         st.error("Authentication token missing unexpectedly. Please log in.")
+         return None
     headers = {"Authorization": f"Bearer {st.session_state.access_token}"}
     if include_content_type:
         headers["Content-Type"] = "application/json"
+    headers["Accept"] = "application/json"
     return headers
 
-
-def make_request(method, endpoint, json_data=None, data=None, files=None, **kwargs):
-
+def make_request(method, endpoint, json_data=None, data=None, files=None, timeout=30, **kwargs):
     if not ensure_authenticated():
+        st.warning("Authentication required. Please log in.")
+        st.stop()
         return None
 
-    include_content_type = not files and not data
+    include_content_type = json_data is not None and not files and not data
     headers = get_headers(include_content_type=include_content_type)
+    if headers is None:
+        st.error("Failed to prepare authorization headers.")
+        return None
+
     url = f"{API_BASE_URL}{endpoint}"
 
     try:
-        response = requests.request(method, url, headers=headers, json=json_data, data=data, files=files, **kwargs)
+        response = requests.request(
+            method, url, headers=headers, json=json_data, data=data, files=files, timeout=timeout, **kwargs
+        )
 
         if response.status_code == 401:
-            st.warning("Received 401 Unauthorized. Attempting token refresh...")
+            st.warning("Received 401 Unauthorized. Attempting refresh...")
             if refresh_token():
                 headers = get_headers(include_content_type=include_content_type)
-                st.info("Retrying request with new token...")
-                response = requests.request(method, url, headers=headers, json=json_data, data=data, files=files, **kwargs)
+                if headers is None: return None
+                st.info("Retrying request with refreshed token...")
+                response = requests.request(method, url, headers=headers, json=json_data, data=data, files=files, timeout=timeout, **kwargs)
                 if response.status_code == 401:
-                    st.error("Authentication still failed after token refresh. Please log in again.")
+                    st.error("Authentication still failed after refresh. Check permissions or log in again.")
                     logout()
+                    st.rerun()
                     return None
             else:
-                st.error("Token refresh failed. Please log in again.")
+                st.error("Token refresh failed during retry. Please log in again.")
+                st.rerun()
                 return None
 
         response.raise_for_status()
 
-        if response.status_code == 204:
-            return True
+        if response.status_code == 204: return True
+        elif response.status_code == 202:
+            st.info(f"Request accepted by API (Status {response.status_code}). Background processing started.")
+            try: return response.json()
+            except json.JSONDecodeError: return True
         elif response.text:
-            try:
-                return response.json()
+            try: return response.json()
             except json.JSONDecodeError:
-                st.warning(f"Response status {response.status_code} OK, but content is not valid JSON.")
+                st.warning(f"API returned status {response.status_code} but response is not valid JSON.")
                 st.text(response.text[:500] + "...")
                 return response.text
-        else:
-            return True
+        else: return True
 
     except requests.exceptions.HTTPError as http_err:
         st.error(f"HTTP Error: {http_err}")
@@ -142,18 +150,27 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, **kwar
                 detail_msg = error_detail.get('detail', json.dumps(error_detail))
                 st.error(f"API Error Detail: {detail_msg}")
             except json.JSONDecodeError:
-                st.text(http_err.response.text)
+                st.error("Raw Error Response:"); st.text(http_err.response.text)
+        return None
+    except requests.exceptions.ConnectionError as conn_err:
+        st.error(f"Connection Error: Failed to connect to API at {API_BASE_URL}. Is the server running?"); st.error(f"Details: {conn_err}")
+        return None
+    except requests.exceptions.Timeout as timeout_err:
+        st.error(f"Request Timed Out: The API server did not respond in {timeout} seconds."); st.error(f"Details: {timeout_err}")
         return None
     except requests.exceptions.RequestException as req_err:
-        st.error(f"Request Failed: {req_err}")
+        st.error(f"Request Failed: An unexpected error occurred during the request."); st.error(f"Details: {req_err}")
         return None
     except Exception as e:
-        st.error(f"An unexpected error occurred in make_request: {e}")
+        st.error(f"An unexpected error occurred in make_request function: {e}")
+        import traceback; st.error(traceback.format_exc())
         return None
 
-def display_analysis_results(result, include_json_expander=True):
+
+def display_analysis_results(result, participants: Optional[List[Any]] = None, include_json_expander=True):
     if not isinstance(result, dict):
-        st.warning("Invalid analysis result format.")
+        st.warning("Invalid analysis result format received.")
+        st.json(result)
         return
 
     st.markdown(f"**Transcript ID:** `{result.get('transcript_id', 'N/A')}`")
@@ -162,12 +179,13 @@ def display_analysis_results(result, include_json_expander=True):
 
     with col_summary:
         st.subheader("📝 Summary")
-        st.markdown(result.get('summary', '_No summary provided._'))
+        summary = result.get('summary')
+        st.markdown(summary if summary else '_No summary provided._')
 
         st.subheader("📌 Key Points")
-        key_points = result.get('key_points', [])
-        if key_points:
-            st.markdown("\n".join(f"- {p}" for p in key_points))
+        key_points = result.get('key_points')
+        if key_points and isinstance(key_points, list) and len(key_points) > 0:
+             st.markdown("\n".join(f"- {p}" for p in key_points))
         else:
             st.write("_No key points extracted._")
 
@@ -176,7 +194,6 @@ def display_analysis_results(result, include_json_expander=True):
         task = result.get('task')
         responsible = result.get('responsible')
         deadline = result.get('deadline')
-
         if task or responsible or deadline:
              st.markdown(f"**Task:** {task if task else '_Not specified_'}")
              st.markdown(f"**Responsible:** {responsible if responsible else '_Not specified_'}")
@@ -184,205 +201,288 @@ def display_analysis_results(result, include_json_expander=True):
         else:
              st.info("No specific action item extracted.")
 
+        st.subheader("👥 Participants")
+        if participants and isinstance(participants, list) and len(participants) > 0:
+            try:
+                participants_str = ', '.join(map(str, participants))
+                st.markdown(f"{participants_str}")
+            except Exception as e:
+                st.warning(f"Could not format participants list: {e}")
+                st.markdown("_Error displaying participants._")
+        elif participants:
+            st.markdown(f"{participants}")
+        else:
+            st.markdown("_Not available for this analysis._")
+
+        st.caption("---")
         created_at_str = result.get('created_at')
         updated_at_str = result.get('updated_at')
-        if created_at_str: st.caption(f"Created: {created_at_str}")
-        if updated_at_str: st.caption(f"Updated: {updated_at_str}")
+        created_dt = None
+        try:
+            if created_at_str:
+                created_dt = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                st.caption(f"Analyzed: {created_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            if updated_at_str:
+                updated_dt = datetime.fromisoformat(updated_at_str.replace('Z', '+00:00'))
+                if created_dt is None or abs((updated_dt - created_dt).total_seconds()) > 1:
+                     st.caption(f"Updated: {updated_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        except (ValueError, TypeError):
+             if created_at_str: st.caption(f"Analyzed: {created_at_str}")
+             if updated_at_str: st.caption(f"Updated: {updated_at_str}")
 
     if include_json_expander:
-        with st.expander("🔍 View Raw JSON Response"):
+        with st.expander("🔍 View Raw JSON Response (Analysis Result)"):
             st.json(result)
 
-st.title("Meeting Analysis")
+
+st.title("🗣️ Meeting Analysis Application")
 
 with st.sidebar:
     st.subheader("Authentication")
-    if 'access_token' in st.session_state:
+    if st.session_state.get('logged_in', False):
         st.success(f"Logged in as {st.session_state.get('username', 'User')}")
         if 'token_expiry' in st.session_state:
              try:
-                 remaining = st.session_state.token_expiry - datetime.now()
+                 now = datetime.now()
+                 expiry = st.session_state.token_expiry
+                 remaining = expiry - now
                  if remaining.total_seconds() > 0:
-                     remaining_mins = max(0, int(remaining.total_seconds() / 60))
-                     remaining_secs = max(0, int(remaining.total_seconds() % 60))
-                     st.info(f"Token expires in: {remaining_mins}m {remaining_secs}s")
+                     total_seconds = int(remaining.total_seconds())
+                     days, rem = divmod(total_seconds, 86400); hrs, rem = divmod(rem, 3600); mins, secs = divmod(rem, 60)
+                     expiry_str = f"{mins}m {secs}s"
+                     if hrs > 0: expiry_str = f"{hrs}h {expiry_str}"
+                     if days > 0: expiry_str = f"{days}d {expiry_str}"
+                     st.info(f"Session expires in: {expiry_str.strip()}")
                  else:
-                     st.warning("Access token has expired.")
-             except Exception:
-                 st.warning("Could not determine token expiry.")
+                     st.warning("Session token has expired. Refreshing...")
+                     if not refresh_token(): st.error("Session expired. Please log in again."); st.rerun()
+             except Exception as e: st.warning(f"Could not display token expiry: {e}")
+
         if st.button("Logout"):
-            logout()
-            st.rerun()
+            logout(); st.rerun()
     else:
         with st.form("login_form"):
             username = st.text_input("Username", key="login_user")
             password = st.text_input("Password", type="password", key="login_pass")
             submitted = st.form_submit_button("Login")
             if submitted:
-                if login(username, password):
-                    st.session_state.username = username
-                    st.success("Login successful!")
-                    st.rerun()
+                if login(username, password): st.rerun()
 
-if ensure_authenticated():
+if st.session_state.get('logged_in', False):
 
-    tab_analysis, tab_history = st.tabs(["✨ Analysis", "📂 History"])
+    tab_analysis, tab_history = st.tabs(["✨ New Analysis", "📂 History"])
 
     with tab_analysis:
         st.header("Submit New Transcript for Analysis")
-        st.info("Submit transcript text or file. The system will create the meeting, transcript, analyze it, and show the results.")
-        with st.form("direct_submit_form"):
-            input_method = st.radio("Input Method", ["Paste Text", "Upload File"], index=0, key="direct_input_method")
+        st.info("Submit transcript text or upload a file. The system will create the meeting/transcript and queue it for AI analysis. Status updates will appear below.")
+
+        with st.form("direct_submit_form", clear_on_submit=True):
+            input_method = st.radio("Input Method", ["Paste Text", "Upload File"], index=0, key="direct_input_method", horizontal=True)
             raw_text_input = None
             uploaded_file_input = None
+
             if input_method == "Paste Text":
-                raw_text_input = st.text_area("Paste Raw Transcript Text Here", height=300, key="direct_raw_text")
+                raw_text_input = st.text_area("Paste Raw Transcript Text Here", height=300, key="direct_raw_text", help="Paste the full meeting transcript text.")
             else:
-                uploaded_file_input = st.file_uploader("Choose a transcript file (.txt, .vtt, etc.)", type=['txt', 'vtt', 'srt'], key="direct_file_upload")
+                uploaded_file_input = st.file_uploader("Choose a transcript file", type=['txt', 'vtt', 'srt', 'text'], key="direct_file_upload", help="Upload a plain text file (.txt, .vtt, .srt) containing the transcript.")
             submitted_direct = st.form_submit_button("🚀 Submit and Analyze")
 
-            if submitted_direct:
-                endpoint = "/analysis/process/direct/"
-                form_data = None
-                files_payload = None
-                has_input = False
+        if submitted_direct:
+            endpoint = "/analysis/process/direct/"
+            form_data = None
+            files_payload = None
+            has_input = False
 
-                if input_method == "Paste Text":
-                    if raw_text_input and raw_text_input.strip():
-                        form_data = {'raw_text': raw_text_input}
-                        st.write("Submitting raw text...")
-                        has_input = True
-                    else:
-                        st.warning("Please paste some transcript text.")
-                elif input_method == "Upload File":
-                    if uploaded_file_input is not None:
-                        files_payload = {'file': (uploaded_file_input.name, uploaded_file_input, uploaded_file_input.type)}
-                        st.write(f"Submitting file: {uploaded_file_input.name}")
-                        has_input = True
-                    else:
-                        st.warning("Please upload a transcript file.")
+            if input_method == "Paste Text":
+                if raw_text_input and raw_text_input.strip():
+                    form_data = {'raw_text': raw_text_input}
+                    st.write("Submitting raw text..."); has_input = True
+                else: st.warning("Please paste some transcript text.")
+            elif input_method == "Upload File":
+                if uploaded_file_input is not None:
+                    files_payload = {'file': (uploaded_file_input.name, uploaded_file_input, uploaded_file_input.type)}
+                    st.write(f"Submitting file: {uploaded_file_input.name} ({uploaded_file_input.size} bytes)"); has_input = True
+                else: st.warning("Please upload a transcript file.")
 
-                if has_input:
-                    with st.spinner("Processing transcript and generating analysis... This may take a minute."):
-                        result = make_request("POST", endpoint, data=form_data, files=files_payload)
+            if has_input:
+                initial_response = make_request("POST", endpoint, data=form_data, files=files_payload)
+                if isinstance(initial_response, dict) and 'id' in initial_response and 'processing_status' in initial_response:
+                    transcript_id = initial_response['id']
+                    initial_status = initial_response['processing_status']
+                    retrieved_meeting_id = initial_response.get('meeting_id')
 
-                        if isinstance(result, dict):
-                            st.success("✅ Processing Complete!")
-                            st.divider()
-                            st.subheader("📊 Analysis Results")
-                            display_analysis_results(result)
-                            if 'history_meetings_list' in st.session_state:
-                                del st.session_state['history_meetings_list']
-                            if 'selected_meeting_analyses' in st.session_state:
-                                del st.session_state['selected_meeting_analyses']
-                        elif result is None:
-                             st.error("❌ Processing failed. Check error messages above or API logs for details.")
+                    st.success(f"✅ Submission successful! Transcript ID: {transcript_id}. Analysis queued.")
+                    st.info(f"Initial Status: {initial_status}")
+
+                    status_placeholder = st.status(f"Processing Transcript ID: {transcript_id}...", expanded=True)
+
+                    max_attempts = 60
+                    attempts = 0
+                    final_analysis_result = None
+                    final_participants = None
+                    polling_endpoint = f"/transcripts/status/{transcript_id}/"
+                    analysis_endpoint = f"/analysis/transcript/{transcript_id}/"
+
+                    while attempts < max_attempts:
+                        attempts += 1
+                        time.sleep(5)
+
+                        status_placeholder.write(f"Checking status... (Attempt {attempts}/{max_attempts})")
+                        status_response = make_request("GET", polling_endpoint)
+
+                        if isinstance(status_response, dict) and 'processing_status' in status_response:
+                            current_status = status_response['processing_status']
+                            if not retrieved_meeting_id: retrieved_meeting_id = status_response.get('meeting_id')
+                            status_placeholder.update(label=f"Transcript {transcript_id} Status: **{current_status}**")
+
+                            if current_status == "COMPLETED":
+                                status_placeholder.write("Analysis completed! Fetching results...")
+                                analysis_result = make_request("GET", analysis_endpoint)
+                                if isinstance(analysis_result, dict):
+                                    final_analysis_result = analysis_result
+                                    status_placeholder.write("Analysis results received. Fetching meeting details...")
+
+                                    if retrieved_meeting_id:
+                                        meeting_endpoint = f"/meetings/{retrieved_meeting_id}/"
+                                        meeting_details = make_request("GET", meeting_endpoint)
+                                        if isinstance(meeting_details, dict):
+                                            final_participants = meeting_details.get('participants')
+                                            status_placeholder.write("Meeting details received.")
+                                        else:
+                                            status_placeholder.warning(f"Could not fetch meeting details for ID {retrieved_meeting_id}.")
+                                    else:
+                                         status_placeholder.warning("Could not determine meeting ID to fetch participants.")
+
+                                    status_placeholder.update(label=f"Analysis for Transcript {transcript_id} Complete!", state="complete", expanded=False)
+                                    st.success("📊 Processing complete:")
+                                else:
+                                    status_placeholder.error("Failed to fetch completed analysis results.")
+                                    status_placeholder.update(label="Error fetching analysis results", state="error")
+                                break
+
+                            elif current_status == "FAILED":
+                                error_msg = status_response.get('processing_error', 'Unknown error')
+                                status_placeholder.error(f"Analysis Failed: {error_msg}")
+                                status_placeholder.update(label=f"Analysis Failed for Transcript {transcript_id}", state="error")
+                                break
+
+                            elif current_status in ["PENDING", "PROCESSING"]: pass # Continue polling
+                            else: status_placeholder.warning(f"Unexpected status: {current_status}"); break # Unknown status
+
                         else:
-                             st.error("❌ Processing failed. Unexpected response format received from API.")
-                             st.text(result)
+                            status_placeholder.warning(f"Could not retrieve valid status (Attempt {attempts}).")
+                            if attempts > 5 and status_response is None:
+                                 status_placeholder.error("Failed to get status update after multiple attempts."); status_placeholder.update(label="Status Check Failed", state="error"); break
+
+                    if attempts == max_attempts and not final_analysis_result:
+                        status_placeholder.warning("Polling timed out. Analysis might still be running or failed."); status_placeholder.update(label="Polling Timeout", state="error")
+
+                    if final_analysis_result:
+                        display_analysis_results(
+                            final_analysis_result,participants=final_participants )
+                        if 'history_meetings_list' in st.session_state: del st.session_state['history_meetings_list']
+                        if 'selected_meeting_analyses' in st.session_state: del st.session_state['selected_meeting_analyses']
+
+                elif initial_response is None: st.error("❌ Submission failed. Check error messages.")
+                else: st.error(f"❌ Submission failed. Unexpected API response: {initial_response}")
+
     with tab_history:
         st.header("View Past Analysis Results")
 
-        if st.button("🔄 Load Meeting History", key="load_history"):
-            with st.spinner("Loading meetings..."):
-                meetings = make_request("GET", "/meetings/?limit=500")
-
-                if isinstance(meetings, list):
-                    st.session_state.history_meetings_list = meetings
-                    st.success(f"Loaded {len(meetings)} meetings.")
-                    if not meetings:
-                        st.info("No past meetings found.")
-                    if 'selected_meeting_analyses' in st.session_state:
-                        del st.session_state['selected_meeting_analyses']
-                    if '_cached_analysis_meeting_id' in st.session_state:
-                        del st.session_state['_cached_analysis_meeting_id']
-
-                else:
-                    st.session_state.history_meetings_list = []
-                    st.warning("Could not load meetings history.")
+        col_load, col_select = st.columns([1, 3])
+        with col_load:
+             if st.button("🔄 Load Meeting History", key="load_history", use_container_width=True):
+                  with st.spinner("Loading meetings..."):
+                       meetings = make_request("GET", "/meetings/?limit=500")
+                       if isinstance(meetings, list):
+                           st.session_state.history_meetings_list = meetings
+                           st.success(f"Loaded {len(meetings)} meetings.")
+                           if not meetings: st.info("No past meetings found.")
+                           if 'selected_meeting_analyses' in st.session_state: del st.session_state['selected_meeting_analyses']
+                           if '_cached_analysis_meeting_id' in st.session_state: del st.session_state['_cached_analysis_meeting_id']
+                           st.session_state.selected_meeting_id_history = None
+                           if 'history_meeting_select' in st.session_state: st.session_state.history_meeting_select = "-- Select a Meeting --"
+                       else:
+                           st.session_state.history_meetings_list = []
+                           st.warning("Could not load meetings history. API error or no meetings.")
 
         if 'history_meetings_list' in st.session_state and st.session_state.history_meetings_list:
-            meetings_list = st.session_state.history_meetings_list
-            try:
-                sorted_meetings = sorted(
-                    meetings_list,
-                    key=lambda m: m.get('meeting_date', m.get('created_at', '1970-01-01T00:00:00Z')),
-                    reverse=True
-                )
-            except Exception as sort_e:
-                st.warning(f"Could not sort meetings by date: {sort_e}")
-                sorted_meetings = meetings_list
-            meeting_options = {
-                f"{m.get('title', 'Untitled')} (ID: {m.get('id', 'N/A')} | Date: {m.get('meeting_date', 'N/A')[:16]})": m.get(
-                    'id')
-                for m in sorted_meetings
-            }
-            meeting_options_list = ["-- Select a Meeting --"] + list(meeting_options.keys())
-            options_keys = list(meeting_options.keys())
-            selected_id_from_state = st.session_state.get('selected_meeting_id_history')
-            current_index = 0
-            if selected_id_from_state:
-                try:
-                    selected_label = next(
-                        label for label, id_val in meeting_options.items() if id_val == selected_id_from_state)
-                    current_index = meeting_options_list.index(selected_label)
-                except (StopIteration, ValueError):
-                    current_index = 0
+             meetings_list = st.session_state.history_meetings_list
+             try:
+                 sorted_meetings = sorted(meetings_list, key=lambda m: m.get('meeting_date', '1970-01-01T00:00:00Z'), reverse=True)
+             except Exception as sort_e:
+                 st.warning(f"Could not sort meetings by date: {sort_e}. Using received order."); sorted_meetings = meetings_list
 
-            selected_meeting_label = st.selectbox(
-                "Select Meeting to View Analysis",
-                options=meeting_options_list,
-                index=current_index,
-                key="history_meeting_select"
-            )
+             meeting_options = {}
+             for m in sorted_meetings:
+                  meeting_id = m.get('id', 'N/A'); title = m.get('title', 'Untitled'); date_str = m.get('meeting_date', 'No Date')
+                  try:
+                      formatted_date = datetime.fromisoformat(date_str.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M') if isinstance(date_str, str) else 'Invalid Date'
+                  except: formatted_date = date_str
+                  label = f"{title} (ID: {meeting_id} | {formatted_date})"
+                  meeting_options[label] = meeting_id
 
-            selected_meeting_id = None
-            if selected_meeting_label != "-- Select a Meeting --":
-                selected_meeting_id = meeting_options.get(selected_meeting_label)
+             meeting_options_list = ["-- Select a Meeting --"] + list(meeting_options.keys())
 
-            st.session_state.selected_meeting_id_history = selected_meeting_id
-            if selected_meeting_id:
-                st.divider()
-                st.subheader(f"Analysis Results for: {selected_meeting_label}")
+             selected_id_from_state = st.session_state.get('selected_meeting_id_history'); current_index = 0
+             if selected_id_from_state:
+                 try:
+                     selected_label = next(label for label, id_val in meeting_options.items() if id_val == selected_id_from_state)
+                     current_index = meeting_options_list.index(selected_label)
+                 except (StopIteration, ValueError): st.session_state.selected_meeting_id_history = None
 
-                cached_id = st.session_state.get('_cached_analysis_meeting_id')
-                analyses_in_state = 'selected_meeting_analyses' in st.session_state
+             with col_select:
+                 selected_meeting_label = st.selectbox("Select Meeting to View Analysis", options=meeting_options_list, index=current_index, key="history_meeting_select")
 
-                if not analyses_in_state or cached_id != selected_meeting_id:
-                    endpoint = f"/analysis/meeting/{selected_meeting_id}/"
-                    with st.spinner(f"Fetching analysis results for meeting ID {selected_meeting_id}..."):
-                        analysis_results_list = make_request("GET", endpoint)
+             selected_meeting_id = None
+             if selected_meeting_label != "-- Select a Meeting --": selected_meeting_id = meeting_options.get(selected_meeting_label)
+             st.session_state.selected_meeting_id_history = selected_meeting_id
+             if selected_meeting_id:
+                 st.divider()
+                 st.subheader(f"Analysis Results for: {selected_meeting_label}")
+                 cached_id = st.session_state.get('_cached_analysis_meeting_id')
+                 analyses_in_state = 'selected_meeting_analyses' in st.session_state
+                 if not analyses_in_state or cached_id != selected_meeting_id:
+                     endpoint = f"/analysis/meeting/{selected_meeting_id}/"
+                     with st.spinner(f"Fetching analysis results for meeting ID {selected_meeting_id}..."):
+                         analysis_results_list = make_request("GET", endpoint)
+                         if isinstance(analysis_results_list, list):
+                             st.session_state.selected_meeting_analyses = analysis_results_list
+                             st.session_state._cached_analysis_meeting_id = selected_meeting_id
+                             if not analysis_results_list: st.info("No analysis results found for this meeting (may be pending/failed).")
+                         else:
+                             st.warning(f"Could not load analysis results for meeting {selected_meeting_id}. API error?"); st.session_state.selected_meeting_analyses = []; st.session_state._cached_analysis_meeting_id = selected_meeting_id
 
-                        if isinstance(analysis_results_list, list):
-                            st.session_state.selected_meeting_analyses = analysis_results_list
-                            st.session_state._cached_analysis_meeting_id = selected_meeting_id
-                            if not analysis_results_list:
-                                st.info("No analysis results found for this meeting.")
-                        else:
-                            st.warning(f"Could not load analysis results for meeting {selected_meeting_id}.")
-                            st.session_state.selected_meeting_analyses = []
-                            st.session_state._cached_analysis_meeting_id = selected_meeting_id
+                 if 'selected_meeting_analyses' in st.session_state and st.session_state.selected_meeting_analyses:
+                     sorted_analyses = sorted(st.session_state.selected_meeting_analyses, key=lambda x: x.get('created_at', ''), reverse=True)
 
-                if 'selected_meeting_analyses' in st.session_state and st.session_state.selected_meeting_analyses:
-                    for analysis_result in st.session_state.selected_meeting_analyses:
-                        transcript_id = analysis_result.get('transcript_id', 'N/A')
-                        created_time = analysis_result.get('created_at', datetime.now().isoformat())[
-                                       :16]
-                        expander_label = f"Analysis for Transcript ID: {transcript_id} (Created: {created_time})"
+                     for analysis_result in sorted_analyses:
+                         transcript_id = analysis_result.get('transcript_id', 'N/A'); created_time_str = analysis_result.get('created_at', 'N/A')
+                         try: created_time_fmt = datetime.fromisoformat(created_time_str.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M')
+                         except: created_time_fmt = created_time_str
+                         expander_label = f"Analysis for Transcript ID: {transcript_id} (Created: {created_time_fmt})"
 
-                        with st.expander(expander_label, expanded=True):
-                            display_analysis_results(analysis_result, include_json_expander=False)
-                            button_key = f"json_{transcript_id}_{created_time}"  # Unique key
-                            if st.button("Show Raw JSON", key=button_key):
-                                st.json(analysis_result)
-                        st.markdown("---")
+                         with st.expander(expander_label, expanded=True):
+                            meeting_participants = None
+                            if 'history_meetings_list' in st.session_state:
+                                try:
+                                    meeting_details = next(m for m in st.session_state.history_meetings_list if m.get('id') == selected_meeting_id)
+                                    meeting_participants = meeting_details.get('participants')
+                                except StopIteration: pass
 
-                elif 'selected_meeting_analyses' in st.session_state and not st.session_state.selected_meeting_analyses:
-                    pass
+                            display_analysis_results(analysis_result, participants=meeting_participants, include_json_expander=False)
+                            button_key = f"json_{transcript_id}_{created_time_str}"
+                            if st.button("Show Raw JSON", key=button_key): st.json(analysis_result)
+                         st.markdown("---")
+
+                 elif 'selected_meeting_analyses' in st.session_state and not st.session_state.selected_meeting_analyses: pass
+
         elif 'history_meetings_list' in st.session_state and not st.session_state.history_meetings_list:
-            st.info("No past meetings found in history.")
+             st.info("No past meetings found in history after loading.")
         else:
-            st.info("Click 'Load Meeting History' button above to view past analyses.")
+             st.info("Click 'Load Meeting History' button above to view past analyses.")
 
-elif 'access_token' not in st.session_state:
+
+elif not st.session_state.get('logged_in', False):
     st.info("👋 Welcome! Please log in using the sidebar to access the application features.")
+    st.image("https://streamlit.io/images/brand/streamlit-logo-secondary-colormark-darktext.png", width=300)
