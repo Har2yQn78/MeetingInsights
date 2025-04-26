@@ -1,0 +1,46 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Python cache/compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+env/
+.env
+*.env
+
+# IDE / OS files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*~
+Thumbs.db
+.DS_Store
+
+# Local database files (if using sqlite for testing)
+db.sqlite3*
+*.sqlite3*
+
+# Static/Media files (if generated locally and collected in container)
+# Keep media if it contains essential default files, otherwise ignore
+# media/
+# staticfiles/ # Usually collected inside container
+
+# Test reports / Coverage
+.pytest_cache/
+htmlcov/
+.coverage*

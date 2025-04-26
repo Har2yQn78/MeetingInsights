@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine # Using alpine for smaller size
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      # These MUST match the user/password/db in your DATABASE_URL
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password} # CHANGE THIS IN .env!
+    ports:
+      - "5432:5432" # Optional: Expose for external debugging if needed
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine # Using alpine for smaller size
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379" # Optional: Expose for external debugging if needed
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    command: gunicorn meetinginsight.wsgi:application --bind 0.0.0.0:8000 # Explicit command
+    volumes:
+      # Volume for user-uploaded media files
+      - media_volume:/app/media
+      # Volume for collected static files (if needed externally, e.g., by Nginx later)
+      - staticfiles_volume:/app/staticfiles
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env # Load variables from .env file
+    environment:
+      # Override DB/Redis URLs to use service names
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-postgres}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=meetinginsight.settings # Ensure correct settings module
+      # Set DEBUG=False generally for compose, can override in .env if needed
+      - DEBUG=${DEBUG:-False}
+      # SECRET_KEY and OPENROUTER_API_KEY should be set in .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Add entrypoint script later if migrations need to run automatically
+
+  worker:
+    build: .
+    # Command to start the celery worker
+    command: celery -A meetinginsight worker --loglevel=info
+    volumes:
+      # Mount media volume if worker needs access to files
+      - media_volume:/app/media
+    env_file:
+      - .env # Load variables from .env file
+    environment:
+      # Override DB/Redis URLs to use service names
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-postgres}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=meetinginsight.settings # Ensure correct settings module
+      # SECRET_KEY and OPENROUTER_API_KEY should be set in .env
+    depends_on:
+      web: # Worker often depends on the web service's code being ready implicitly
+        condition: service_started # Or depends on db/redis directly
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_volume:
+  staticfiles_volume:
