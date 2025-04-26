@@ -1,0 +1,7 @@
+scripts:
+  celery:
+    - celery -A meetinginsight worker --loglevel=info
+  server:
+    - python manage.py runserver 8000
+  app:
+    - streamlit run app
