@@ -20,3 +20,4 @@ openai
 dj_database_url
 streamlit
 requests
+rav

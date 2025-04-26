@@ -4,6 +4,8 @@ import json
 import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Any
+import io
+import fitz
 
 st.set_page_config(layout="wide", page_title="Meeting Analysis")
 
@@ -166,6 +168,56 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, timeou
         import traceback; st.error(traceback.format_exc())
         return None
 
+def extract_text_from_pdf(file_content: bytes) -> str:
+    try:
+        with fitz.open(stream=file_content, filetype="pdf") as doc:
+            text = ""
+            for page in doc:
+                text += page.get_text()
+        return text
+    except Exception as e:
+        st.error(f"Error extracting text from PDF: {e}")
+        raise ValueError(f"Could not process PDF file: {e}")
+
+def extract_text_from_txt(file_content: bytes) -> str:
+    try:
+        return file_content.decode('utf-8')
+    except UnicodeDecodeError:
+        try:
+            return file_content.decode('latin-1')
+        except Exception as e:
+            st.error(f"Error decoding text file (tried UTF-8, Latin-1): {e}")
+            raise ValueError("Could not decode text file. Ensure it's UTF-8 or Latin-1 encoded.")
+    except Exception as e:
+        st.error(f"Error reading text file: {e}")
+        raise ValueError(f"Could not read text file: {e}")
+
+
+def extract_text_from_uploaded_file(uploaded_file) -> Optional[str]:
+    if uploaded_file is None:
+        return None
+
+    file_content = uploaded_file.getvalue()
+    file_type = uploaded_file.type
+    file_name = uploaded_file.name
+
+    st.write(f"Attempting to extract text from '{file_name}' (Type: {file_type})...")
+
+    try:
+        if file_type == "application/pdf":
+            return extract_text_from_pdf(file_content)
+        elif file_type == "text/plain":
+            return extract_text_from_txt(file_content)
+        else:
+            st.warning(f"Unsupported file type: {file_type}. Trying to read as plain text...")
+            return extract_text_from_txt(file_content)
+    except ValueError as e:
+        st.error(f"Failed to extract text from {file_name}: {e}")
+        return None
+    except Exception as e:
+        st.error(f"An unexpected error occurred during text extraction: {e}")
+        return None
+
 
 def display_analysis_results(result, participants: Optional[List[Any]] = None, include_json_expander=True):
     if not isinstance(result, dict):
@@ -274,7 +326,7 @@ if st.session_state.get('logged_in', False):
 
     with tab_analysis:
         st.header("Submit New Transcript for Analysis")
-        st.info("Submit transcript text or upload a file. The system will create the meeting/transcript and queue it for AI analysis. Status updates will appear below.")
+        st.info("Submit transcript text or upload a file (.txt, .pdf). The app will extract the text and queue it for AI analysis.")
 
         with st.form("direct_submit_form", clear_on_submit=True):
             input_method = st.radio("Input Method", ["Paste Text", "Upload File"], index=0, key="direct_input_method", horizontal=True)
@@ -284,28 +336,49 @@ if st.session_state.get('logged_in', False):
             if input_method == "Paste Text":
                 raw_text_input = st.text_area("Paste Raw Transcript Text Here", height=300, key="direct_raw_text", help="Paste the full meeting transcript text.")
             else:
-                uploaded_file_input = st.file_uploader("Choose a transcript file", type=['txt', 'vtt', 'srt', 'text'], key="direct_file_upload", help="Upload a plain text file (.txt, .vtt, .srt) containing the transcript.")
+                uploaded_file_input = st.file_uploader(
+                    "Choose a transcript file",
+                    type=['txt', 'pdf'],
+                    key="direct_file_upload",
+                    help="Upload a text, PDF, or Markdown file containing the transcript."
+                )
             submitted_direct = st.form_submit_button("🚀 Submit and Analyze")
 
         if submitted_direct:
             endpoint = "/analysis/process/direct/"
             form_data = None
-            files_payload = None
+            extracted_text = None
             has_input = False
 
             if input_method == "Paste Text":
                 if raw_text_input and raw_text_input.strip():
                     form_data = {'raw_text': raw_text_input}
-                    st.write("Submitting raw text..."); has_input = True
+                    st.write("Submitting provided raw text..."); has_input = True
                 else: st.warning("Please paste some transcript text.")
+
             elif input_method == "Upload File":
                 if uploaded_file_input is not None:
-                    files_payload = {'file': (uploaded_file_input.name, uploaded_file_input, uploaded_file_input.type)}
-                    st.write(f"Submitting file: {uploaded_file_input.name} ({uploaded_file_input.size} bytes)"); has_input = True
-                else: st.warning("Please upload a transcript file.")
+                    try:
+                        extracted_text = extract_text_from_uploaded_file(uploaded_file_input)
+                        if extracted_text and extracted_text.strip():
+                             st.success(f"Successfully extracted text from {uploaded_file_input.name} ({len(extracted_text)} characters).")
+                             form_data = {'raw_text': extracted_text}
+                             has_input = True
+                        elif extracted_text is not None:
+                             st.warning(f"File {uploaded_file_input.name} seems to contain no text after extraction.")
+                             has_input = False
+                        else:
+                             has_input = False
+                    except Exception as e:
+                         st.error(f"Error during file processing: {e}")
+                         has_input = False
+                else:
+                    st.warning("Please upload a transcript file.")
 
-            if has_input:
-                initial_response = make_request("POST", endpoint, data=form_data, files=files_payload)
+            if has_input and form_data is not None:
+                st.write("Sending extracted text to analysis API...")
+                initial_response = make_request("POST", endpoint, data=form_data, files=None)
+
                 if isinstance(initial_response, dict) and 'id' in initial_response and 'processing_status' in initial_response:
                     transcript_id = initial_response['id']
                     initial_status = initial_response['processing_status']
@@ -322,6 +395,7 @@ if st.session_state.get('logged_in', False):
                     final_participants = None
                     polling_endpoint = f"/transcripts/status/{transcript_id}/"
                     analysis_endpoint = f"/analysis/transcript/{transcript_id}/"
+                    current_status = initial_status
 
                     while attempts < max_attempts:
                         attempts += 1
@@ -366,25 +440,35 @@ if st.session_state.get('logged_in', False):
                                 status_placeholder.update(label=f"Analysis Failed for Transcript {transcript_id}", state="error")
                                 break
 
-                            elif current_status in ["PENDING", "PROCESSING"]: pass # Continue polling
-                            else: status_placeholder.warning(f"Unexpected status: {current_status}"); break # Unknown status
+                            elif current_status in ["PENDING", "PROCESSING"]:
+                                pass
+                            else:
+                                status_placeholder.warning(f"Unexpected status: {current_status}")
+                                break
 
                         else:
-                            status_placeholder.warning(f"Could not retrieve valid status (Attempt {attempts}).")
+                            status_placeholder.warning(f"Could not retrieve valid status (Attempt {attempts}). Retrying...")
                             if attempts > 5 and status_response is None:
-                                 status_placeholder.error("Failed to get status update after multiple attempts."); status_placeholder.update(label="Status Check Failed", state="error"); break
+                                 status_placeholder.error("Failed to get status update after multiple attempts. Please check backend logs.")
+                                 status_placeholder.update(label="Status Check Failed", state="error")
+                                 break
 
-                    if attempts == max_attempts and not final_analysis_result:
-                        status_placeholder.warning("Polling timed out. Analysis might still be running or failed."); status_placeholder.update(label="Polling Timeout", state="error")
+                    if attempts == max_attempts and not final_analysis_result and current_status not in ["COMPLETED", "FAILED"]:
+                        status_placeholder.warning("Polling timed out. Analysis might still be running, have failed without updating, or the task may not have started. Please check the analysis history later or backend logs.")
+                        status_placeholder.update(label="Polling Timeout", state="warning")
 
                     if final_analysis_result:
-                        display_analysis_results(
-                            final_analysis_result,participants=final_participants )
+                        display_analysis_results(final_analysis_result, participants=final_participants)
                         if 'history_meetings_list' in st.session_state: del st.session_state['history_meetings_list']
                         if 'selected_meeting_analyses' in st.session_state: del st.session_state['selected_meeting_analyses']
 
-                elif initial_response is None: st.error("❌ Submission failed. Check error messages.")
-                else: st.error(f"❌ Submission failed. Unexpected API response: {initial_response}")
+                elif initial_response is None:
+                    st.error("❌ Submission failed. Could not send data to API. Check connection or previous error messages.")
+                else:
+                    st.error(f"❌ Submission failed. Unexpected API response after sending data: {initial_response}")
+            elif submitted_direct and not has_input:
+                 st.warning("No valid input provided (check text area or file upload/extraction).")
+
 
     with tab_history:
         st.header("View Past Analysis Results")
