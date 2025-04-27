@@ -1,71 +1,66 @@
-# Stage 1: Build environment with dependencies
-FROM python:3.11-slim-bullseye AS builder
+# Use Python 3.11 slim version as the base image
+FROM python:3.11-slim-bullseye
 
-# Set environment variables
+# Set environment variables for Python
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# Set work directory
-WORKDIR /app
-
-# Install system dependencies (libpq-dev might not be strictly needed with psycopg[binary])
-# Keeping build-essential just in case other packages need it.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    # libpq-dev # Removed, psycopg[binary] should handle it
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels -r requirements.txt
-
-
-# Stage 2: Final runtime image
-FROM python:3.11-slim-bullseye AS runtime
-
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+# Set environment variables for Django and Celery (can be overridden by docker-compose)
 ENV DJANGO_SETTINGS_MODULE=meetinginsight.settings # Adjust if your settings module path is different
 ENV CELERY_BROKER_URL=redis://redis:6379/0
 ENV CELERY_RESULT_BACKEND=redis://redis:6379/0
-# DATABASE_URL, SECRET_KEY, DEBUG, OPENROUTER_API_KEY etc. should be set via env_file
+# Remember to set DATABASE_URL, SECRET_KEY, DEBUG, OPENROUTER_API_KEY etc. via env_file or environment in docker-compose
 
-# Set work directory
+# Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies required at runtime (postgres client libs for psycopg)
+# Install system dependencies
+# - build-essential: Needed if any Python packages compile C extensions during pip install
+# - libpq5: Runtime library for connecting to PostgreSQL using psycopg
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     libpq5 \
+    # Add any other system dependencies needed by your Python packages
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user and group
-RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+# Upgrade pip
+RUN pip install --no-cache-dir --upgrade pip
 
-# Copy installed dependencies from builder stage
-COPY --from=builder /wheels /wheels
-COPY --from=builder /app/requirements.txt .
-RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt && rm -rf /wheels
+# Copy only the requirements file first to leverage Docker cache
+COPY requirements.txt .
 
-# Copy application code
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+ RUN apt-get remove -y --purge build-essential \
+     && apt-get autoremove -y --purge \
+     && rm -rf /var/lib/apt/lists/*
+
+# Copy the rest of the application code into the container
 COPY . .
 
-# Set permissions for static/media directories if they exist in the code
-RUN mkdir -p /app/staticfiles /app/media && \
-    chown -R appuser:appgroup /app/staticfiles /app/media
+# Create directories for static and media files if they don't exist
+# These will typically be mounted via volumes in docker-compose for development/persistence
+RUN mkdir -p /app/staticfiles /app/media
 
-# Collect static files
+# Create a non-root user and group to run the application
+RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+
+# Run collectstatic - Do this *before* changing ownership if staticfiles dir needs root write access initially
+# Ensure your settings are configured correctly for static files collection
 RUN python manage.py collectstatic --noinput
-RUN chown -R appuser:appgroup /app/staticfiles
 
-# Change ownership of the entire app directory to the non-root user
+# Change ownership of the application directory and created volumes to the non-root user
+# This includes the code, staticfiles, and media directories
 RUN chown -R appuser:appgroup /app
 
 # Switch to the non-root user
 USER appuser
 
-# Expose the port the app runs on
+# Expose the port the application will run on
 EXPOSE 8000
 
-# Default command (Use Gunicorn)
+# Define the default command to run the application using Gunicorn
+# Make sure gunicorn is in your requirements.txt
 CMD ["gunicorn", "meetinginsight.wsgi:application", "--bind", "0.0.0.0:8000"]
