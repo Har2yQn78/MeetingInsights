@@ -8,7 +8,8 @@ from .schemas import MeetingSchemaIn, MeetingSchemaOut, MeetingSchemaUpdate, Err
 
 router = Router(tags=["meetings"])
 
-@router.post("/", response={201: MeetingSchemaOut, 400: ErrorDetail}, auth=JWTAuth())
+@router.post("/", response={201: MeetingSchemaOut, 400: ErrorDetail}, auth=JWTAuth(), summary="create meeting",
+             description="Creates a new meeting record with the provided title, date, participants, and metadata.")
 def create_meeting(request, data: MeetingSchemaIn):
     try:
         meeting = Meeting.objects.create(
@@ -22,7 +23,8 @@ def create_meeting(request, data: MeetingSchemaIn):
         return 400, {"detail": str(e)}
 
 
-@router.get("/", response=List[MeetingSchemaOut], auth=JWTAuth())
+@router.get("/", response=List[MeetingSchemaOut], auth=JWTAuth(), summary="list meetings",
+            description="List all meetings.")
 def list_meetings(
         request,
         title: Optional[str] = None,
@@ -43,7 +45,8 @@ def list_meetings(
     return queryset.order_by('-created_at')[offset:offset + limit]
 
 
-@router.get("/{meeting_id}/", response={200: MeetingSchemaOut, 404: ErrorDetail}, auth=JWTAuth())
+@router.get("/{meeting_id}/", response={200: MeetingSchemaOut, 404: ErrorDetail}, auth=JWTAuth(), summary="Get Meeting by ID",
+            description="Retrieves the details of a specific meeting by its unique ID.")
 def get_meeting(request, meeting_id: int):
     try:
         meeting = get_object_or_404(Meeting, id=meeting_id)
@@ -52,7 +55,8 @@ def get_meeting(request, meeting_id: int):
         return 404, {"detail": f"Meeting with id {meeting_id} not found"}
 
 
-@router.put("/{meeting_id}/", response={200: MeetingSchemaOut, 404: ErrorDetail, 400: ErrorDetail}, auth=JWTAuth())
+@router.put("/{meeting_id}/", response={200: MeetingSchemaOut, 404: ErrorDetail, 400: ErrorDetail}, auth=JWTAuth(),
+            summary="Update Meeting", description="Updates an existing meeting record partially. Only provided fields will be updated.")
 def update_meeting(request, meeting_id: int, data: MeetingSchemaUpdate):
     try:
         meeting = get_object_or_404(Meeting, id=meeting_id)
@@ -74,7 +78,8 @@ def update_meeting(request, meeting_id: int, data: MeetingSchemaUpdate):
         return 400, {"detail": str(e)}
 
 
-@router.delete("/{meeting_id}/", response={204: None, 404: ErrorDetail}, auth=JWTAuth())
+@router.delete("/{meeting_id}/", response={204: None, 404: ErrorDetail}, auth=JWTAuth(), summary="Delete Meeting",
+               description="Deletes a specific meeting record by its ID")
 def delete_meeting(request, meeting_id: int):
     try:
         meeting = get_object_or_404(Meeting, id=meeting_id)
