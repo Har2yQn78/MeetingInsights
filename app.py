@@ -20,7 +20,7 @@ def login(username, password):
         token_data = response.json()
         st.session_state.access_token = token_data["access"]
         st.session_state.refresh_token = token_data["refresh"]
-        st.session_state.token_expiry = datetime.now() + timedelta(minutes=5)
+        st.session_state.token_expiry = datetime.now() + timedelta(hours=6)
         st.session_state.logged_in = True
         st.session_state.username = username
         return True
@@ -51,7 +51,7 @@ def refresh_token():
         response.raise_for_status()
         token_data = response.json()
         st.session_state.access_token = token_data["access"]
-        st.session_state.token_expiry = datetime.now() + timedelta(minutes=5)
+        st.session_state.token_expiry = datetime.now() + timedelta(hours=6)
         st.session_state.logged_in = True
         st.info("Token refreshed successfully.")
         return True
