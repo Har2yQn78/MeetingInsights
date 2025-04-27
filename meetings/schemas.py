@@ -37,4 +37,3 @@ class MeetingSchemaUpdate(Schema):
 
 class ErrorDetail(Schema):
     detail: str
-

@@ -40,6 +40,7 @@ This project provides a Django Ninja backend API and a Streamlit frontend applic
 │ └── views.py 
 ├── meetinginsight/
 │ ├── init.py
+│ ├── api.py
 │ ├── asgi.py
 │ ├── celery.py 
 │ ├── settings.py

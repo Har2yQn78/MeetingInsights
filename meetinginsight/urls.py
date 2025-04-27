@@ -17,21 +17,9 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path
-from ninja_extra import NinjaExtraAPI
-from meetings.api import router as meetings_router
-from transcripts.api import router as transcripts_router
-from analysis.api import router as analysis_router
-from ninja_jwt.controller import NinjaJWTDefaultController
-
-api = NinjaExtraAPI()
-
-api.add_router("/meetings/",    meetings_router)
-api.add_router("/transcripts/", transcripts_router)
-api.add_router("/analysis/",    analysis_router)
-
-api.register_controllers(NinjaJWTDefaultController)
+from .api import api
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/',   api.urls),
+    path('api/', api.urls),
 ]
