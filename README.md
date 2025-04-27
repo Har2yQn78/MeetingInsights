@@ -32,6 +32,7 @@ This project provides a Django Ninja backend API and a Streamlit frontend applic
 │ ├── admin.py
 │ ├── api.py 
 │ ├── apps.py
+│ ├── auth.py
 │ ├── models.py 
 │ ├── schemas.py 
 │ ├── service.py 
@@ -65,11 +66,14 @@ This project provides a Django Ninja backend API and a Streamlit frontend applic
 │ ├── tests.py
 │ ├── utils.py 
 │ └── views.py
-├── .env.example
+├── app.py 
+├── docker-compose.yaml 
+├── Dockerfile.py 
+├── .env.copy
 ├── .gitignore
 ├── manage.py
+├── rav.yaml
 ├── requirements.txt
-├── app.py 
 └── README.md 
 ```
 
