@@ -13,7 +13,8 @@ from analysis.task import process_transcript_analysis
 router = Router(tags=["transcripts"])
 logger = logging.getLogger(__name__)
 
-@router.post("/{meeting_id}/", response={201: TranscriptSchemaOut, 400: ErrorDetail, 404: ErrorDetail}, auth=JWTAuth())
+@router.post("/{meeting_id}/", response={201: TranscriptSchemaOut, 400: ErrorDetail, 404: ErrorDetail}, auth=JWTAuth(),
+             summary="create a new transcript", description="Create a new transcript")
 def create_transcript(request, meeting_id: int, data: TranscriptSchemaIn):
     try:
         meeting = get_object_or_404(Meeting, id=meeting_id)
@@ -44,7 +45,8 @@ def create_transcript(request, meeting_id: int, data: TranscriptSchemaIn):
         return 400, {"detail": f"Failed to create transcript or queue analysis task: {str(e)}"}
 
 
-@router.post("/{meeting_id}/upload/", response={201: TranscriptSchemaOut, 400: ErrorDetail, 404: ErrorDetail}, auth=JWTAuth())
+@router.post("/{meeting_id}/upload/", response={201: TranscriptSchemaOut, 400: ErrorDetail, 404: ErrorDetail}, auth=JWTAuth(),
+             summary="upload a file", description="upload a file that could be pdf or txt")
 def upload_transcript_file(request, meeting_id: int, file: UploadedFile = File(...)):
     try:
         meeting = get_object_or_404(Meeting, id=meeting_id)
@@ -75,7 +77,8 @@ def upload_transcript_file(request, meeting_id: int, file: UploadedFile = File(.
         return 400, {"detail": f"Failed to process file upload or queue analysis task: {str(e)}"}
 
 
-@router.get("/status/{transcript_id}/", response={200: TranscriptStatusSchemaOut, 404: ErrorDetail}, auth=JWTAuth())
+@router.get("/status/{transcript_id}/", response={200: TranscriptStatusSchemaOut, 404: ErrorDetail}, auth=JWTAuth(),
+            summary="check transcript status", description="check transcript status")
 def get_transcript_status(request, transcript_id: int):
     try:
         transcript = get_object_or_404(Transcript.objects.only('id', 'meeting_id', 'processing_status',

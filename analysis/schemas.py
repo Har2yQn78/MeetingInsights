@@ -4,12 +4,12 @@ from datetime import datetime, date
 from typing import Optional, List
 
 class AnalysisResultSchemaOut(Schema):
-    transcript_id: int = Field(...)
-    summary: Optional[str] = Field(None)
-    key_points: Optional[List[str]] = Field(None)
-    task: str = Field(...)
-    responsible: Optional[str] = Field(None)
-    deadline: Optional[date] = Field(None) # (format: YYYY-MM-DD)
+    transcript_id: int = Field(..., description="The transcript id")
+    summary: Optional[str] = Field(None, description="The summary of the analysis")
+    key_points: Optional[List[str]] = Field(None, description="The keypoints of the analysis")
+    task: str = Field(..., description="The task of the analysis")
+    responsible: Optional[str] = Field(None, description="The responsible of the analysis")
+    deadline: Optional[date] = Field(None, description="(format: YYYY-MM-DD)")
     created_at: datetime = Field(...)
     updated_at: datetime = Field(...)
 
