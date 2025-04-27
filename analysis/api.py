@@ -22,17 +22,11 @@ logger = logging.getLogger(__name__)
 @router.get("/transcript/{transcript_id}/", response={200: AnalysisResultSchemaOut, 404: ErrorDetail, 503: ErrorDetail})
 async def get_transcript_analysis(request, transcript_id: int):
     try:
-        analysis = await sync_to_async(get_object_or_404)(
-            AnalysisResult.objects.select_related('transcript', 'transcript__meeting'),
-            transcript_id=transcript_id
-        )
+        analysis = await sync_to_async(get_object_or_404)(AnalysisResult.objects.select_related('transcript', 'transcript__meeting'),transcript_id=transcript_id)
         return 200, analysis
     except Http404:
         transcript_info = await sync_to_async(
-            Transcript.objects.filter(id=transcript_id)
-                            .values('id', 'processing_status')
-                            .first()
-        )()
+            Transcript.objects.filter(id=transcript_id).values('id', 'processing_status').first())()
         if transcript_info:
             status = transcript_info['processing_status']
             if status in [Transcript.ProcessingStatus.PENDING, Transcript.ProcessingStatus.PROCESSING]:
@@ -51,12 +45,7 @@ async def get_transcript_analysis(request, transcript_id: int):
 @router.get("/meeting/{meeting_id}/", response=List[AnalysisResultSchemaOut])
 async def get_meeting_analysis(request, meeting_id: int):
     await sync_to_async(get_object_or_404)(Meeting, id=meeting_id)
-
-    results = await sync_to_async(list)(
-        AnalysisResult.objects.filter(transcript__meeting_id=meeting_id)
-                           .select_related('transcript', 'transcript__meeting')
-                           .order_by('-created_at')
-    )
+    results = await sync_to_async(list)(AnalysisResult.objects.filter(transcript__meeting_id=meeting_id).select_related('transcript', 'transcript__meeting').order_by('-created_at'))
     return results
 
 @router.post("/generate/{transcript_id}/", response={202: TranscriptStatusSchemaOut, 400: ErrorDetail, 404: ErrorDetail, 409: ErrorDetail}, tags=["analysis", "async"], auth=AsyncJWTAuth())
@@ -75,11 +64,9 @@ async def generate_analysis(request, transcript_id: int):
     has_file = await sync_to_async(lambda: bool(transcript.original_file and transcript.original_file.name))()
     if not transcript_text and not has_file:
         logger.warning(f"Attempted to generate analysis for transcript {transcript_id} with no text or file.")
-        await sync_to_async(Transcript.objects.filter(id=transcript.id).update)(
-            processing_status=Transcript.ProcessingStatus.FAILED,
-            processing_error="Cannot analyze: Transcript has no text content or associated file.",
-            async_task_id=None
-        )
+        await sync_to_async(Transcript.objects.filter(id=transcript.id).update)(processing_status=Transcript.ProcessingStatus.FAILED,
+                                                                                processing_error="Cannot analyze: Transcript has no text content or associated file.",
+                                                                                async_task_id=None)
         return 400, {"detail": f"Transcript {transcript_id} has no text content or file to analyze. Marked as failed."}
 
     try:

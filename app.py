@@ -669,11 +669,9 @@ if st.session_state.get('logged_in', False):
 
                      elif 'selected_meeting_analyses' in st.session_state and not st.session_state.selected_meeting_analyses:
                          pass
-
         elif 'history_meetings_list' in st.session_state and not st.session_state.history_meetings_list:
              st.info("No past meetings found in history after loading.")
         else:
              st.info("Click 'Load Meeting History' button above to view past analyses.")
-
 elif not st.session_state.get('logged_in', False):
     st.info("👋 Welcome! Please log in using the sidebar to access the application features.")

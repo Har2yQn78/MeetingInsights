@@ -23,15 +23,9 @@ def create_transcript(request, meeting_id: int, data: TranscriptSchemaIn):
     transcript = None
     try:
         with transaction.atomic():
-            transcript = Transcript.objects.create(
-                meeting=meeting,
-                raw_text=data.raw_text,
-                processing_status=Transcript.ProcessingStatus.PENDING
-            )
+            transcript = Transcript.objects.create(meeting=meeting, raw_text=data.raw_text, processing_status=Transcript.ProcessingStatus.PENDING)
             logger.info(f"Created Transcript {transcript.id} for Meeting {meeting_id}. Queueing analysis task.")
-
             task = process_transcript_analysis.delay(transcript.id)
-
             transcript.async_task_id = task.id
             transcript.save(update_fields=['async_task_id'])
             logger.info(f"Transcript {transcript.id} queued for analysis with task ID: {task.id}")
@@ -60,16 +54,9 @@ def upload_transcript_file(request, meeting_id: int, file: UploadedFile = File(.
     transcript = None
     try:
         with transaction.atomic():
-            transcript = Transcript.objects.create(
-                meeting=meeting,
-                original_file=file,
-                raw_text="",
-                processing_status=Transcript.ProcessingStatus.PENDING
-            )
+            transcript = Transcript.objects.create(meeting=meeting, original_file=file, raw_text="", processing_status=Transcript.ProcessingStatus.PENDING)
             logger.info(f"Created Transcript {transcript.id} via file upload ({file.name}) for Meeting {meeting_id}. Queueing analysis task.")
-
             task = process_transcript_analysis.delay(transcript.id)
-
             transcript.async_task_id = task.id
             transcript.save(update_fields=['async_task_id'])
             logger.info(f"Transcript {transcript.id} queued for analysis with task ID: {task.id}")
@@ -91,9 +78,9 @@ def upload_transcript_file(request, meeting_id: int, file: UploadedFile = File(.
 @router.get("/status/{transcript_id}/", response={200: TranscriptStatusSchemaOut, 404: ErrorDetail}, auth=JWTAuth())
 def get_transcript_status(request, transcript_id: int):
     try:
-        transcript = get_object_or_404(Transcript.objects.only(
-            'id', 'meeting_id', 'processing_status', 'processing_error', 'original_file', 'updated_at', 'async_task_id'
-        ), id=transcript_id)
+        transcript = get_object_or_404(Transcript.objects.only('id', 'meeting_id', 'processing_status',
+                                                               'processing_error', 'original_file', 'updated_at', 'async_task_id'),
+                                       id=transcript_id)
         return 200, transcript
     except Transcript.DoesNotExist:
         return 404, {"detail": f"Transcript with id {transcript_id} not found"}
