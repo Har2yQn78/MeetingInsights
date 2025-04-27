@@ -29,7 +29,7 @@ else:
 
 
 class TranscriptAnalysisService:
-    def __init__(self, model_name: str = "google/gemma-3-12b-it:free"):
+    def __init__(self, model_name: str = "deepseek/deepseek-chat-v3-0324:free"):
         self.model = model_name
 
     def _parse_relative_date(self, date_str: Optional[str], reference_date: date) -> Optional[date]:
@@ -52,15 +52,33 @@ class TranscriptAnalysisService:
 
         today = datetime.now().date()
         prompt = f"""
-        Analyze the following meeting transcript. Extract the following information:
-        1. Meeting Title: Infer a concise title based on the main topic. If no clear topic, use null.
-        2. Meeting Date: Extract the date the meeting took place. Use YYYY-MM-DD format. Handle relative dates like 'today', 'yesterday', 'last Tuesday', 'January 15th'. If not mentioned, use null.
-        3. Participants: List the names of people mentioned as attending or speaking. If none mentioned, use an empty list [].
-        4. Summary: Provide a concise summary of the discussion (2-3 paragraphs).
-        5. Key Points: List 5-7 key discussion points or decisions as strings.
-        6. Action Item - Task: Describe the main action item or task identified. If multiple, summarize the primary one or list them concisely here. If none, use null.
-        7. Action Item - Responsible: Identify the person or entity assigned to the task. If not mentioned or not applicable, use null.
-        8. Action Item - Deadline: Extract the deadline for the task. Use YYYY-MM-DD format. Handle relative dates like 'next Friday', 'in two weeks', 'end of month'. If not specified, use null.
+        Role: Expert Meeting Analyst and Information Extractor
+        Task: You are a highly skilled meeting analyst who extracts key information from meeting transcripts with precision. Your job is to analyze the provided transcript and extract specific data points in a structured format.
+         Guidelines
+        - Extract only information that is explicitly mentioned or can be reasonably inferred from the transcript
+        - Use clear, accurate language in your extractions
+        - Format dates consistently in YYYY-MM-DD format
+        - Be precise with participant names and roles
+        - When information is not available, use null in the JSON response
+        - Prioritize accuracy over completeness
+        Reference Information
+        Today's date for relative date calculations: {today.strftime('%Y-%m-%d %A')}
+        Required Extraction Fields
+        1. Meeting Title: Create a concise, descriptive title based on the primary topic discussed. Use null if no clear topic emerges.
+
+        2. Meeting Date: Extract when the meeting occurred in YYYY-MM-DD format. Convert relative dates like "yesterday" or "next Tuesday" based on the reference date provided. Use null if not mentioned.
+        
+        3. Participants: Identify all attendees mentioned by name. Return as a list of strings. Return empty list [] if none are mentioned.
+        
+        4. Summary: Provide a concise 2-3 paragraph overview capturing the main discussion points and outcomes. Focus on substance rather than process.
+        
+        5. Key Points: Extract 2-4 most important discussion points or decisions. Format as a list of clear, standalone statements.
+        
+        6. Action Item - Task: Identify the primary action item or task discussed. If multiple exist, include the most critical one or summarize them. Use null if none mentioned.
+        
+        7. Action Item - Responsible: Identify the person or team assigned to the action item. Use null if not specified.
+        
+        8. Action Item - Deadline: Extract the deadline for the task in YYYY-MM-DD format. Convert relative timeframes like "in two weeks" or "by month-end" based on the reference date. Use null if not mentioned.
 
         Format the output STRICTLY as JSON with the following structure:
         {{

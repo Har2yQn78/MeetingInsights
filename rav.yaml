@@ -4,4 +4,4 @@ scripts:
   server:
     - python manage.py runserver 8000
   app:
-    - streamlit run app
+    - streamlit run app.py
