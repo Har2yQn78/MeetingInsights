@@ -12,12 +12,8 @@ router = Router(tags=["meetings"])
              description="Creates a new meeting record with the provided title, date, participants, and metadata.")
 def create_meeting(request, data: MeetingSchemaIn):
     try:
-        meeting = Meeting.objects.create(
-            title=data.title,
-            meeting_date=data.meeting_date or datetime.now(),
-            participants=data.participants,
-            metadata=data.metadata if hasattr(data, 'metadata') else None
-        )
+        meeting = Meeting.objects.create(title=data.title, meeting_date=data.meeting_date or datetime.now(),
+                                         participants=data.participants, metadata=data.metadata if hasattr(data, 'metadata') else None)
         return 201, meeting
     except Exception as e:
         return 400, {"detail": str(e)}
@@ -25,14 +21,8 @@ def create_meeting(request, data: MeetingSchemaIn):
 
 @router.get("/", response=List[MeetingSchemaOut], auth=JWTAuth(), summary="list meetings",
             description="List all meetings.")
-def list_meetings(
-        request,
-        title: Optional[str] = None,
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None,
-        offset: int = 0,
-        limit: int = 100
-):
+def list_meetings(request, title: Optional[str] = None, date_from: Optional[datetime] = None,
+                  date_to: Optional[datetime] = None, offset: int = 0, limit: int = 100):
     queryset = Meeting.objects.all()
 
     if title:
@@ -78,8 +68,7 @@ def update_meeting(request, meeting_id: int, data: MeetingSchemaUpdate):
         return 400, {"detail": str(e)}
 
 
-@router.delete("/{meeting_id}/", response={204: None, 404: ErrorDetail}, auth=JWTAuth(), summary="Delete Meeting",
-               description="Deletes a specific meeting record by its ID")
+@router.delete("/{meeting_id}/", response={204: None, 404: ErrorDetail}, auth=JWTAuth(), summary="Delete Meeting", description="Deletes a specific meeting record by its ID")
 def delete_meeting(request, meeting_id: int):
     try:
         meeting = get_object_or_404(Meeting, id=meeting_id)

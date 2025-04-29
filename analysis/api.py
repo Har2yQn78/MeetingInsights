@@ -19,16 +19,15 @@ from .auth import AsyncJWTAuth
 router = Router(tags=["analysis"])
 logger = logging.getLogger(__name__)
 
-@router.get("/transcript/{transcript_id}/", response={200: AnalysisResultSchemaOut, 404: ErrorDetail, 503: ErrorDetail},
-            summary="Get analysis results for a transcript.")
+@router.get("/transcript/{transcript_id}/", response={200: AnalysisResultSchemaOut, 404: ErrorDetail, 503: ErrorDetail})
 async def get_transcript_analysis(request, transcript_id: int):
     try:
-        analysis = await sync_to_async(get_object_or_404)(AnalysisResult.objects.select_related('transcript', 'transcript__meeting'),transcript_id=transcript_id)
+        analysis = await sync_to_async(get_object_or_404)(AnalysisResult.objects.select_related('transcript'), transcript_id=transcript_id)
         return 200, analysis
     except Http404:
-        transcript_info = await sync_to_async(
+         transcript_info = await sync_to_async(
             Transcript.objects.filter(id=transcript_id).values('id', 'processing_status').first())()
-        if transcript_info:
+         if transcript_info:
             status = transcript_info['processing_status']
             if status in [Transcript.ProcessingStatus.PENDING, Transcript.ProcessingStatus.PROCESSING]:
                 return 503, {"detail": f"Analysis for transcript {transcript_id} is currently processing (Status: {status}). Please try again later."}
@@ -36,17 +35,18 @@ async def get_transcript_analysis(request, transcript_id: int):
                  return 404, {"detail": f"Analysis for transcript {transcript_id} failed. Check transcript status endpoint for details."}
             else:
                  return 404, {"detail": f"Analysis results for transcript {transcript_id} not found, and transcript status is '{status}'."}
-        else:
+         else:
              return 404, {"detail": f"Transcript with id {transcript_id} not found."}
     except Exception as e:
         logger.error(f"Error getting analysis for transcript {transcript_id}: {e}", exc_info=True)
         return 500, {"detail": "An internal server error occurred while fetching analysis results."}
 
 
-@router.get("/meeting/{meeting_id}/", response={200: PaginatedAnalysisResponse, 404: ErrorDetail}, auth=AsyncJWTAuth() )
-async def get_meeting_analysis(request, meeting_id: int, offset: int = 0, limit: int = 5 ):
+
+@router.get("/meeting/{meeting_id}/", response={200: PaginatedAnalysisResponse, 404: ErrorDetail}, auth=AsyncJWTAuth())
+async def get_meeting_analysis(request, meeting_id: int, offset: int = 0, limit: int = 5):
     await sync_to_async(get_object_or_404)(Meeting, id=meeting_id)
-    results_qs = AnalysisResult.objects.filter(transcript__meeting_id=meeting_id).select_related('transcript', 'transcript__meeting').order_by('-created_at')
+    results_qs = AnalysisResult.objects.filter(transcript__meeting_id=meeting_id).select_related('transcript').order_by('-created_at')
     total_count = await sync_to_async(results_qs.count)()
     items_list = await sync_to_async(list)(results_qs[offset : offset + limit])
     return PaginatedAnalysisResponse(count=total_count, offset=offset, limit=limit, items=items_list)

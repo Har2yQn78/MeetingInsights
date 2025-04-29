@@ -61,9 +61,9 @@ class TranscriptAnalysisService:
         Reference Information
         Today's date for relative date calculations: {today.strftime('%Y-%m-%d %A')}
         Required Extraction Fields
-        1. Meeting Title: Create a concise, descriptive title based on the primary topic discussed. Use null if no clear topic emerges.
+        1. Transcript Title: Create a concise, descriptive title based on the primary topic discussed. Use null if no clear topic emerges.
 
-        2. Meeting Date: Extract when the meeting occurred in YYYY-MM-DD format. Convert relative dates like "yesterday" or "next Tuesday" based on the reference date provided. Use null if not mentioned.
+        2. Transcript Date: Extract when the meeting occurred in YYYY-MM-DD format. Convert relative dates like "yesterday" or "next Tuesday" based on the reference date provided. Use null if not mentioned.
         
         3. Participants: Identify all attendees mentioned by name. Return as a list of strings. Return empty list [] if none are mentioned.
         
@@ -79,8 +79,8 @@ class TranscriptAnalysisService:
         
         Format the output STRICTLY as JSON with the following structure:
         {{
-            "meeting_title": "String title or null",
-            "meeting_date_extracted": "YYYY-MM-DD string or null",
+            "transcript_title": "String title or null",
+            "transcript_date_extracted": "YYYY-MM-DD string or null",
             "participants_extracted": ["Participant Name 1", "Participant Name 2"],
             "summary": "String summary text...",
             "key_points": ["List", "of", "string", "key points"],

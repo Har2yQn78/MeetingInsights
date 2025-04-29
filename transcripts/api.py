@@ -5,7 +5,6 @@ from ninja import Router, File
 from ninja.files import UploadedFile
 from ninja_jwt.authentication import JWTAuth
 import logging
-
 from .models import Transcript, Meeting
 from .schemas import TranscriptSchemaIn, TranscriptSchemaOut, TranscriptStatusSchemaOut, ErrorDetail
 from analysis.tasks import process_transcript_analysis
@@ -13,8 +12,7 @@ from analysis.tasks import process_transcript_analysis
 router = Router(tags=["transcripts"])
 logger = logging.getLogger(__name__)
 
-@router.post("/{meeting_id}/", response={201: TranscriptSchemaOut, 400: ErrorDetail, 404: ErrorDetail}, auth=JWTAuth(),
-             summary="create a new transcript", description="Create a new transcript")
+@router.post("/{meeting_id}/", response={201: TranscriptSchemaOut, 400: ErrorDetail, 404: ErrorDetail}, auth=JWTAuth(), summary="create a new transcript", description="Create a new transcript")
 def create_transcript(request, meeting_id: int, data: TranscriptSchemaIn):
     try:
         meeting = get_object_or_404(Meeting, id=meeting_id)
