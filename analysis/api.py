@@ -12,14 +12,15 @@ from transcripts.models import Transcript
 from meetings.models import Meeting
 from .models import AnalysisResult
 from transcripts.schemas import TranscriptStatusSchemaOut
-from .schemas import AnalysisResultSchemaOut, ErrorDetail, DirectProcessInput
-from .task import process_transcript_analysis
+from .schemas import AnalysisResultSchemaOut, ErrorDetail, DirectProcessInput, PaginatedAnalysisResponse
+from .tasks import process_transcript_analysis
 from .auth import AsyncJWTAuth
 
 router = Router(tags=["analysis"])
 logger = logging.getLogger(__name__)
 
-@router.get("/transcript/{transcript_id}/", response={200: AnalysisResultSchemaOut, 404: ErrorDetail, 503: ErrorDetail})
+@router.get("/transcript/{transcript_id}/", response={200: AnalysisResultSchemaOut, 404: ErrorDetail, 503: ErrorDetail},
+            summary="Get analysis results for a transcript.")
 async def get_transcript_analysis(request, transcript_id: int):
     try:
         analysis = await sync_to_async(get_object_or_404)(AnalysisResult.objects.select_related('transcript', 'transcript__meeting'),transcript_id=transcript_id)
@@ -42,11 +43,13 @@ async def get_transcript_analysis(request, transcript_id: int):
         return 500, {"detail": "An internal server error occurred while fetching analysis results."}
 
 
-@router.get("/meeting/{meeting_id}/", response=List[AnalysisResultSchemaOut])
-async def get_meeting_analysis(request, meeting_id: int):
+@router.get("/meeting/{meeting_id}/", response={200: PaginatedAnalysisResponse, 404: ErrorDetail}, auth=AsyncJWTAuth() )
+async def get_meeting_analysis(request, meeting_id: int, offset: int = 0, limit: int = 5 ):
     await sync_to_async(get_object_or_404)(Meeting, id=meeting_id)
-    results = await sync_to_async(list)(AnalysisResult.objects.filter(transcript__meeting_id=meeting_id).select_related('transcript', 'transcript__meeting').order_by('-created_at'))
-    return results
+    results_qs = AnalysisResult.objects.filter(transcript__meeting_id=meeting_id).select_related('transcript', 'transcript__meeting').order_by('-created_at')
+    total_count = await sync_to_async(results_qs.count)()
+    items_list = await sync_to_async(list)(results_qs[offset : offset + limit])
+    return PaginatedAnalysisResponse(count=total_count, offset=offset, limit=limit, items=items_list)
 
 @router.post("/generate/{transcript_id}/", response={202: TranscriptStatusSchemaOut, 400: ErrorDetail, 404: ErrorDetail, 409: ErrorDetail}, tags=["analysis", "async"], auth=AsyncJWTAuth())
 async def generate_analysis(request, transcript_id: int):
@@ -92,87 +95,87 @@ async def generate_analysis(request, transcript_id: int):
              processing_error=f"Failed to queue analysis task: {str(e)}",)
         return 500, {"detail": f"An unexpected error occurred while queueing the analysis task: {str(e)}"}
 
-@router.post(
-    "/process/direct/",
-    response={202: TranscriptStatusSchemaOut, 400: ErrorDetail, 500: ErrorDetail},tags=["analysis", "async"],auth=AsyncJWTAuth())
-async def direct_process_transcript(request, payload: DirectProcessInput = Form(None), file: Optional[UploadedFile] = File(None)):
-    transcript_text: Optional[str] = None
-    file_content: Optional[bytes] = None
-    original_filename: Optional[str] = None
-    source_type: Optional[str] = None
-
-    if payload and payload.raw_text:
-        transcript_text = payload.raw_text
-        source_type = 'text'
-        logger.info("Processing direct submission with raw text payload.")
-    elif file:
-        try:
-            original_filename = file.name
-            file_content = await file.read()
-            source_type = 'file'
-            try:
-                transcript_text_from_file = file_content.decode('utf-8')
-                logger.info(f"Processing direct submission with file: {original_filename}. Decoded as UTF-8.")
-            except UnicodeDecodeError:
-                 logger.warning(f"Could not decode file {original_filename} as UTF-8. Analysis task must read from file.")
-                 transcript_text = ""
-            except Exception as decode_err:
-                 logger.error(f"Error decoding file {original_filename}: {decode_err}", exc_info=True)
-                 transcript_text = ""
-        except Exception as e:
-            logger.error(f"Error reading uploaded file '{file.name if file else 'N/A'}': {e}", exc_info=True)
-            return 400, {"detail": f"Could not read uploaded file: {e}"}
-    else:
-        logger.warning("Direct process endpoint called without raw_text payload or file upload.")
-        return 400, {"detail": "Please provide either 'raw_text' in the form data or upload a 'file'."}
-
-    if not (transcript_text and transcript_text.strip()) and not file_content:
-         logger.warning(f"Direct process submission provided empty content (Source: {source_type}). Text empty and no file content.")
-         return 400, {"detail": "Transcript content cannot be empty if no file is provided or the file is empty."}
-
-    transcript_instance = None
-    try:
-        @sync_to_async(thread_sensitive=True)
-        def create_meeting_and_transcript_sync():
-            nonlocal transcript_instance
-            with transaction.atomic():
-                meeting = Meeting.objects.create(title=f"Meeting (Processing {datetime.now().strftime('%Y%m%d_%H%M%S')})",
-                    meeting_date=datetime.now().date(), participants=[])
-                logger.info(f"Created placeholder Meeting ID: {meeting.id}")
-
-                transcript_instance = Transcript(meeting=meeting,
-                    raw_text=transcript_text if source_type == 'text' and transcript_text and transcript_text.strip() else "",
-                    processing_status=Transcript.ProcessingStatus.PENDING,)
-                if source_type == 'file' and file_content and original_filename:
-                    transcript_instance.original_file.save(original_filename,ContentFile(file_content),save=False )
-                    logger.info(f"Attached original file '{original_filename}' to transcript.")
-                    if not transcript_instance.raw_text:
-                         logger.info("Raw text field is empty for file upload, analysis task will read from file.")
-
-                transcript_instance.save()
-                logger.info(f"Created Transcript ID: {transcript_instance.id} for Meeting ID: {meeting.id}")
-                return transcript_instance
-        transcript = await create_meeting_and_transcript_sync()
-        logger.info(f"Queueing analysis task for newly created transcript {transcript.id}")
-        task = process_transcript_analysis.delay(transcript.id)
-        transcript.async_task_id = task.id
-        await sync_to_async(transcript.save)(update_fields=['async_task_id'])
-        logger.info(f"Transcript {transcript.id} task ID set to {task.id}")
-
-        return 202, transcript
-
-    except Exception as e:
-        logger.error(f"Unexpected error during direct processing submission: {e}", exc_info=True)
-        if transcript_instance and transcript_instance.pk:
-            try:
-                await sync_to_async(Transcript.objects.filter(id=transcript_instance.id).update)(
-                    processing_status=Transcript.ProcessingStatus.FAILED,
-                    processing_error=f"Failed during direct processing submission: {str(e)}",
-                    async_task_id=None)
-                logger.warning(f"Marked Transcript {transcript_instance.id} as FAILED due to direct processing error.")
-            except Exception as update_err:
-                 logger.error(f"Failed to mark transcript {transcript_instance.id} as FAILED after direct processing error: {update_err}")
-        return 500, {"detail": f"An unexpected internal error occurred during submission: {str(e)}"}
+# @router.post(
+#     "/process/direct/",
+#     response={202: TranscriptStatusSchemaOut, 400: ErrorDetail, 500: ErrorDetail},tags=["analysis", "async"],auth=AsyncJWTAuth())
+# async def direct_process_transcript(request, payload: DirectProcessInput = Form(None), file: Optional[UploadedFile] = File(None)):
+#     transcript_text: Optional[str] = None
+#     file_content: Optional[bytes] = None
+#     original_filename: Optional[str] = None
+#     source_type: Optional[str] = None
+#
+#     if payload and payload.raw_text:
+#         transcript_text = payload.raw_text
+#         source_type = 'text'
+#         logger.info("Processing direct submission with raw text payload.")
+#     elif file:
+#         try:
+#             original_filename = file.name
+#             file_content = await file.read()
+#             source_type = 'file'
+#             try:
+#                 transcript_text_from_file = file_content.decode('utf-8')
+#                 logger.info(f"Processing direct submission with file: {original_filename}. Decoded as UTF-8.")
+#             except UnicodeDecodeError:
+#                  logger.warning(f"Could not decode file {original_filename} as UTF-8. Analysis task must read from file.")
+#                  transcript_text = ""
+#             except Exception as decode_err:
+#                  logger.error(f"Error decoding file {original_filename}: {decode_err}", exc_info=True)
+#                  transcript_text = ""
+#         except Exception as e:
+#             logger.error(f"Error reading uploaded file '{file.name if file else 'N/A'}': {e}", exc_info=True)
+#             return 400, {"detail": f"Could not read uploaded file: {e}"}
+#     else:
+#         logger.warning("Direct process endpoint called without raw_text payload or file upload.")
+#         return 400, {"detail": "Please provide either 'raw_text' in the form data or upload a 'file'."}
+#
+#     if not (transcript_text and transcript_text.strip()) and not file_content:
+#          logger.warning(f"Direct process submission provided empty content (Source: {source_type}). Text empty and no file content.")
+#          return 400, {"detail": "Transcript content cannot be empty if no file is provided or the file is empty."}
+#
+#     transcript_instance = None
+#     try:
+#         @sync_to_async(thread_sensitive=True)
+#         def create_meeting_and_transcript_sync():
+#             nonlocal transcript_instance
+#             with transaction.atomic():
+#                 meeting = Meeting.objects.create(title=f"Meeting (Processing {datetime.now().strftime('%Y%m%d_%H%M%S')})",
+#                     meeting_date=datetime.now().date(), participants=[])
+#                 logger.info(f"Created placeholder Meeting ID: {meeting.id}")
+#
+#                 transcript_instance = Transcript(meeting=meeting,
+#                     raw_text=transcript_text if source_type == 'text' and transcript_text and transcript_text.strip() else "",
+#                     processing_status=Transcript.ProcessingStatus.PENDING,)
+#                 if source_type == 'file' and file_content and original_filename:
+#                     transcript_instance.original_file.save(original_filename,ContentFile(file_content),save=False )
+#                     logger.info(f"Attached original file '{original_filename}' to transcript.")
+#                     if not transcript_instance.raw_text:
+#                          logger.info("Raw text field is empty for file upload, analysis task will read from file.")
+#
+#                 transcript_instance.save()
+#                 logger.info(f"Created Transcript ID: {transcript_instance.id} for Meeting ID: {meeting.id}")
+#                 return transcript_instance
+#         transcript = await create_meeting_and_transcript_sync()
+#         logger.info(f"Queueing analysis task for newly created transcript {transcript.id}")
+#         task = process_transcript_analysis.delay(transcript.id)
+#         transcript.async_task_id = task.id
+#         await sync_to_async(transcript.save)(update_fields=['async_task_id'])
+#         logger.info(f"Transcript {transcript.id} task ID set to {task.id}")
+#
+#         return 202, transcript
+#
+#     except Exception as e:
+#         logger.error(f"Unexpected error during direct processing submission: {e}", exc_info=True)
+#         if transcript_instance and transcript_instance.pk:
+#             try:
+#                 await sync_to_async(Transcript.objects.filter(id=transcript_instance.id).update)(
+#                     processing_status=Transcript.ProcessingStatus.FAILED,
+#                     processing_error=f"Failed during direct processing submission: {str(e)}",
+#                     async_task_id=None)
+#                 logger.warning(f"Marked Transcript {transcript_instance.id} as FAILED due to direct processing error.")
+#             except Exception as update_err:
+#                  logger.error(f"Failed to mark transcript {transcript_instance.id} as FAILED after direct processing error: {update_err}")
+#         return 500, {"detail": f"An unexpected internal error occurred during submission: {str(e)}"}
 
 
 @sync_to_async

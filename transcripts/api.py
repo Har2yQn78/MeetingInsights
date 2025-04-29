@@ -8,7 +8,7 @@ import logging
 
 from .models import Transcript, Meeting
 from .schemas import TranscriptSchemaIn, TranscriptSchemaOut, TranscriptStatusSchemaOut, ErrorDetail
-from analysis.task import process_transcript_analysis
+from analysis.tasks import process_transcript_analysis
 
 router = Router(tags=["transcripts"])
 logger = logging.getLogger(__name__)

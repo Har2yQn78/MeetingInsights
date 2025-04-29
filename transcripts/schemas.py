@@ -18,7 +18,8 @@ class TranscriptSchemaIn(Schema):
 class TranscriptSchemaOut(Schema):
     id: int
     meeting_id: int
-    raw_text: str
+    title: Optional[str] = Field(None, description="Title generated for this specific transcript during analysis.")
+    raw_text: Optional[str]
     processing_status: ProcessingStatusEnum
     processing_error: Optional[str] = None
     original_file_url: Optional[AnyUrl] = None
@@ -39,13 +40,20 @@ class TranscriptSchemaOut(Schema):
                 return None
         return None
 
+    @staticmethod
+    def resolve_raw_text(obj: TranscriptModel):
+         return obj.raw_text if obj.raw_text else None
+
+
 class TranscriptStatusSchemaOut(Schema):
     id: int
     meeting_id: int
+    title: Optional[str] = Field(None, description="Title generated for this specific transcript during analysis.") # <--- ADDED FIELD
     processing_status: ProcessingStatusEnum
     processing_error: Optional[str] = None
     original_file_url: Optional[AnyUrl] = None
     updated_at: datetime
+    async_task_id: Optional[str] = None
 
     @staticmethod
     def resolve_meeting_id(obj: TranscriptModel):

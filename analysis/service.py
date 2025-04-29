@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from datetime import datetime, date, timedelta
 from django.conf import settings
 from decouple import config, AutoConfig
@@ -11,7 +11,7 @@ from dateutil.parser import parse as dateutil_parse
 
 logger = logging.getLogger(__name__)
 
-config = AutoConfig(search_path="/home/harry/meetinginsight")
+config = AutoConfig(search_path=settings.BASE_DIR)
 OPENROUTER_API_KEY = config("OPENROUTER_API_KEY", default=None)
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
@@ -20,10 +20,7 @@ if not OPENROUTER_API_KEY:
 
 client = None
 if OPENROUTER_API_KEY:
-    client = AsyncOpenAI(
-        api_key=OPENROUTER_API_KEY,
-        base_url=OPENROUTER_API_BASE,
-    )
+    client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_API_BASE)
 else:
     logger.warning("OpenRouter client not initialized because OPENROUTER_API_KEY is missing.")
 
@@ -79,7 +76,7 @@ class TranscriptAnalysisService:
         7. Action Item - Responsible: Identify the person or team assigned to the action item. Use null if not specified.
         
         8. Action Item - Deadline: Extract the deadline for the task in YYYY-MM-DD format. Convert relative timeframes like "in two weeks" or "by month-end" based on the reference date. Use null if not mentioned.
-
+        
         Format the output STRICTLY as JSON with the following structure:
         {{
             "meeting_title": "String title or null",
@@ -104,12 +101,7 @@ class TranscriptAnalysisService:
 
         try:
             logger.info(f"Sending request to OpenRouter model: {self.model} for transcript analysis (async call)")
-            response = await client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={ "type": "json_object" }
-            )
-
+            response = await client.chat.completions.create(model=self.model, messages=[{"role": "user", "content": prompt}],response_format={ "type": "json_object" })
             content = response.choices[0].message.content
             logger.debug(f"Raw response content from LLM: {content}")
 
@@ -133,49 +125,41 @@ class TranscriptAnalysisService:
                       logger.error(f"Failed to parse LLM response as JSON and cleanup markers not found. Response: {content[:500]}...")
                       raise ValueError(f"LLM returned non-JSON data.")
 
-            extracted_title = data.get("meeting_title")
-            extracted_date_str = data.get("meeting_date_extracted")
-            extracted_participants = data.get("participants_extracted", [])
-            if not isinstance(extracted_participants, list):
-                logger.warning(f"Participants field was not a list, defaulting to empty. Value: {extracted_participants}")
-                extracted_participants = []
-            if extracted_title is not None and not isinstance(extracted_title, str): extracted_title = str(extracted_title)
-
-            parsed_meeting_date = self._parse_relative_date(extracted_date_str, today)
-
-            meeting_details = {
-                "title": extracted_title or f"Meeting Analysis {today.strftime('%Y%m%d_%H%M%S')}",
-                "meeting_date": parsed_meeting_date or today,
-                "participants": extracted_participants, # Keep as list
-            }
-
+            extracted_transcript_title = data.get("transcript_title")
             analysis_summary = data.get("summary")
             analysis_key_points = data.get("key_points", [])
             analysis_task = data.get("task")
             analysis_responsible = data.get("responsible")
             analysis_deadline_str = data.get("deadline")
 
+            if extracted_transcript_title is not None and not isinstance(extracted_transcript_title, str):
+                extracted_transcript_title = str(extracted_transcript_title)
+
+            if analysis_summary is not None and not isinstance(analysis_summary, str):
+                analysis_summary = str(analysis_summary)
+
             if not isinstance(analysis_key_points, list):
                  logger.warning(f"Key points field was not a list, defaulting to empty. Value: {analysis_key_points}")
                  analysis_key_points = []
-            analysis_summary = str(analysis_summary) if analysis_summary is not None else None
-            analysis_task = str(analysis_task) if analysis_task is not None else None
-            analysis_responsible = str(analysis_responsible) if analysis_responsible is not None else None
+            else:
+                 analysis_key_points = [str(item) for item in analysis_key_points]
 
+            if analysis_task is not None and not isinstance(analysis_task, str):
+                 analysis_task = str(analysis_task)
+
+            if analysis_responsible is not None and not isinstance(analysis_responsible, str):
+                 analysis_responsible = str(analysis_responsible)
             parsed_deadline = self._parse_relative_date(analysis_deadline_str, today)
 
             analysis_results = {
+                "transcript_title": extracted_transcript_title,
                 "summary": analysis_summary,
                 "key_points": analysis_key_points,
                 "task": analysis_task,
                 "responsible": analysis_responsible,
                 "deadline": parsed_deadline,
             }
-
-            return {
-                "meeting_details": meeting_details,
-                "analysis_results": analysis_results,
-            }
+            return analysis_results
 
         except json.JSONDecodeError as e:
              logged_content = content[:500] + "..." if 'content' in locals() else "Content unavailable"

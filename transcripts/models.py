@@ -12,6 +12,7 @@ class Transcript(models.Model):
         COMPLETED = 'COMPLETED', _('Completed')
         FAILED = 'FAILED', _('Failed')
     meeting = models.ForeignKey(Meeting,on_delete=models.CASCADE,related_name='transcripts',)
+    title = models.CharField(max_length=255, blank=True, null=True)
     raw_text = models.TextField(blank=True, null=True)
     original_file = models.FileField(upload_to='transcripts/%Y/%m/%d/',blank=True,null=True)
     processing_status = models.CharField(max_length=20,choices=ProcessingStatus.choices,
