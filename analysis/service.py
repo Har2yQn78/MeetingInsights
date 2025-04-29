@@ -15,7 +15,7 @@ config = AutoConfig(search_path=config_search_path)
 
 OPENROUTER_API_KEY = config("OPENROUTER_API_KEY", default=None)
 OPENROUTER_API_BASE = config("OPENROUTER_API_BASE", default="https://openrouter.ai/api/v1")
-LLM_MODEL_NAME = config("LLM_MODEL_NAME", default="google/gemini-2.5-pro-exp-03-25")
+LLM_MODEL_NAME = config("LLM_MODEL_NAME", default="deepseek/deepseek-r1:free")
 
 client = None
 if not OPENROUTER_API_KEY:
