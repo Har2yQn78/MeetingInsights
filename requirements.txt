@@ -21,4 +21,4 @@ dj_database_url
 streamlit
 requests
 rav
-
+whitenoise[brotli]
