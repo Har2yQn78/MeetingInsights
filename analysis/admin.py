@@ -4,8 +4,6 @@ from django.contrib import admin
 
 from .models import AnalysisResult
 from transcripts.models import Transcript
-from meetings.models import Meeting
-
 
 @admin.register(AnalysisResult)
 class AnalysisResultAdmin(admin.ModelAdmin):
@@ -34,18 +32,9 @@ class AnalysisResultAdmin(admin.ModelAdmin):
         'created_at',
         'updated_at',
     )
-
     fieldsets = (
         (None, {'fields': ('transcript',)}),
         ('Analysis Content', {'fields': ('summary', 'key_points')}),
         ('Action Items', {'fields': ('task', 'responsible', 'deadline')}),
-        ('Timestamps', {
-            'fields': ('created_at', 'updated_at'),
-            'classes': ('collapse',),}),)
-
-class AnalysisResultInline(admin.StackedInline):
-    model = AnalysisResult
-    readonly_fields = ('created_at', 'updated_at')
-    can_delete = False
-    verbose_name_plural = "Analysis Result"
-    fk_name = 'transcript'
+        ('Timestamps', {'fields': ('created_at', 'updated_at'), 'classes': ('collapse',)}),
+    )
