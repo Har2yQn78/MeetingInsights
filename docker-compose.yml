@@ -12,53 +12,55 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped # Added restart policy
 
   web:
     build: .
-    command: gunicorn meetinginsight.wsgi:application --bind 0.0.0.0:8000
+    # 'command:' is removed - ENTRYPOINT/CMD from Dockerfile defines the start process
     volumes:
+      # Mount media volume for persistent user uploads
       - media_volume:/app/media
-      - staticfiles_volume:/app/staticfiles
+      # Static files are now served from within the image (collected during build)
+      # Do NOT mount staticfiles_volume here if using WhiteNoise
     ports:
       - "8000:8000"
     env_file:
-      - .env # Load variables from .env file (DATABASE_URL MUST point to Neon here)
+      - .env # Load variables from .env file (DATABASE_URL MUST point to Neon/external DB)
     environment:
       # Override Redis URLs to use service name
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DJANGO_SETTINGS_MODULE=meetinginsight.settings
+      - PYTHONUNBUFFERED=1 # Good practice for python logs in docker
       - DEBUG=${DEBUG:-False}
-      # DATABASE_URL is now read directly from .env via env_file
-      # SECRET_KEY and OPENROUTER_API_KEY should be set in .env
+      # DATABASE_URL, SECRET_KEY, OPENROUTER_API_KEY should be set in .env
     depends_on:
       redis:
         condition: service_healthy
-    # Add entrypoint script later if migrations need to run automatically against Neon
+    restart: unless-stopped # Added restart policy
 
   worker:
     build: .
+    # Worker runs its specific command, doesn't need the migration entrypoint
     command: celery -A meetinginsight worker --loglevel=info
     volumes:
-      - media_volume:/app/media # Mount media if worker needs access
+      # Mount media if worker needs access to original files
+      - media_volume:/app/media
     env_file:
-      - .env # Load variables from .env file (DATABASE_URL MUST point to Neon here)
+      - .env # Load variables from .env file
     environment:
       # Override Redis URLs to use service name
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DJANGO_SETTINGS_MODULE=meetinginsight.settings
-      # DATABASE_URL is now read directly from .env via env_file
-      # SECRET_KEY and OPENROUTER_API_KEY should be set in .env
+      - PYTHONUNBUFFERED=1
+      # DATABASE_URL, SECRET_KEY, OPENROUTER_API_KEY should be set in .env
     depends_on:
       redis:
         condition: service_healthy
-      # Optional: depends_on web can ensure code is fully loaded if needed
-      # web:
-      #   condition: service_started
+    restart: unless-stopped # Added restart policy
 
 volumes:
-  # No postgres_data needed
   redis_data:
   media_volume:
-  staticfiles_volume:
+  # staticfiles_volume: # Removed - no longer needed with this setup
