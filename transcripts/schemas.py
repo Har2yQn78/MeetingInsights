@@ -1,5 +1,5 @@
 from ninja import Schema
-from pydantic import Field, AnyUrl
+from pydantic import Field
 from datetime import datetime
 from typing import Optional
 import enum
@@ -22,7 +22,7 @@ class TranscriptSchemaOut(Schema):
     raw_text: Optional[str]
     processing_status: ProcessingStatusEnum
     processing_error: Optional[str] = None
-    original_file_url: Optional[AnyUrl] = None
+    original_file_url: Optional[str] = None
     async_task_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -51,7 +51,7 @@ class TranscriptStatusSchemaOut(Schema):
     title: Optional[str] = Field(None, description="Title generated for this specific transcript during analysis.") # <--- ADDED FIELD
     processing_status: ProcessingStatusEnum
     processing_error: Optional[str] = None
-    original_file_url: Optional[AnyUrl] = None
+    original_file_url: Optional[str] = None
     updated_at: datetime
     async_task_id: Optional[str] = None
 

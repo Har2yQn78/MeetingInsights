@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import requests
 import json
@@ -7,20 +6,13 @@ from datetime import datetime, date, timedelta
 from typing import Optional, List, Any
 import io
 import math
-import traceback # For better error logging
+import traceback
 
-# --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Meeting Analysis")
-
-# --- Global Configuration & State Initialization ---
 with st.sidebar:
     if "api_base_url" not in st.session_state:
         st.session_state.api_base_url = "http://127.0.0.1:8000/api"
     API_BASE_URL = st.text_input("API Base URL", key="api_base_url")
-
-DEFAULT_ANALYSIS_LIMIT = 5
-
-# --- Core Functions ---
 
 def login(username, password):
     api_base = st.session_state.get("api_base_url", "http://127.0.0.1:8000/api")
@@ -109,15 +101,11 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, params
             st.error(f"HTTP Error: {e}" + (f" Status: {e.response.status_code}" if e.response else ""))
             if e.response:
                 try:
-                    err = e.response.json()
-                    detail = err.get('detail', json.dumps(err))
-                    if isinstance(detail, list):
-                        detail = "; ".join(map(str, detail))
-                    elif not isinstance(detail, str):
-                        detail = json.dumps(detail)
+                    err = e.response.json(); detail = err.get('detail', json.dumps(err))
+                    if isinstance(detail, list): detail = "; ".join(map(str, detail))
+                    elif not isinstance(detail, str): detail = json.dumps(detail)
                     st.error(f"Detail: {detail}")
-                except json.JSONDecodeError:
-                    st.error(f"Raw Error: {e.response.text[:500]}...")
+                except json.JSONDecodeError: st.error(f"Raw Error: {e.response.text[:500]}...")
             return None
         except requests.exceptions.ConnectionError as e: st.error(f"Connection Error: {e}"); return None
         except requests.exceptions.Timeout as e: st.error(f"Timeout: {e}"); return None
@@ -133,20 +121,21 @@ def display_analysis_results(result, participants: Optional[List[Any]] = None, i
     with c1:
         st.subheader("📝 Summary"); st.markdown(result.get('summary') or '_N/A_')
         st.subheader("📌 Key Points"); kp = result.get('key_points'); st.markdown("\n".join(f"- {p}" for p in kp) if kp else "_N/A_")
-    with (c2):
+    with c2:
         st.subheader("❗ Action Item"); task=result.get('task'); resp=result.get('responsible'); dl=result.get('deadline')
         if task or resp or dl:
-            st.markdown(f"**Task:** {task or '_N/A_'}")
-            st.markdown(f"**Responsible:** {resp or '_N/A_'}")
-            dl_str = dl
-            if dl:
-                try:
-                    deadline_dt = datetime.strptime(dl, "%Y-%m-%d").date()
-                    dl_str = deadline_dt.strftime("%B %d, %Y")
-                except (ValueError, TypeError):
+             st.markdown(f"**Task:** {task or '_N/A_'}")
+             st.markdown(f"**Responsible:** {resp or '_N/A_'}")
+             dl_str = dl
+             if dl:
+                 try:
+                     deadline_dt = datetime.strptime(dl, "%Y-%m-%d").date()
+                     dl_str = deadline_dt.strftime("%B %d, %Y")
+                 except (ValueError, TypeError):
                     st.warning(f"Bad deadline format: {dl}")
-            st.markdown(f"**Deadline:** {dl_str or '_N/A_'}")
-        else: st.info("No action item.")
+             st.markdown(f"**Deadline:** {dl_str or '_N/A_'}")
+        else:
+            st.info("No action item.")
         st.subheader("👥 Participants"); st.markdown(f"{', '.join(map(str, participants))}" if participants else "_N/A_")
         st.caption("---"); ts_c=result.get('created_at'); ts_u=result.get('updated_at'); dt_c=None
         try:
@@ -157,23 +146,16 @@ def display_analysis_results(result, participants: Optional[List[Any]] = None, i
     if include_json_expander:
         with st.expander("🔍 View Raw JSON (Analysis)"): st.json(result)
 
-# --- Main Application UI ---
 st.title("🗣️ Meeting Analysis Application")
-
-# --- Sidebar (Authentication) ---
-with (st.sidebar):
+with st.sidebar:
     st.subheader("Authentication")
     if st.session_state.get('logged_in', False):
         st.success(f"Logged in: **{st.session_state.get('username', 'User')}**")
         if 'token_expiry' in st.session_state:
             try:
-                rem=st.session_state.token_expiry-datetime.now()
-                if rem.total_seconds() > 0:
-                    st.info(f"Session ends in: {int(rem.total_seconds() // 60)}m")
-                else:
-                    st.warning("Session may have expired.")
-            except Exception as e:
-                st.warning(f"Token expiry display error: {e}")
+                rem=st.session_state.token_expiry-datetime.now();
+                if rem.total_seconds()>0: st.info(f"Session ends in: {int(rem.total_seconds() // 60)}m")
+            except: pass
         if st.button("Logout", key="logout_btn"): logout(); st.rerun()
     else:
         with st.form("login_form"):
@@ -181,19 +163,14 @@ with (st.sidebar):
             if st.form_submit_button("Login"):
                 if login(un, pw): st.rerun()
 
-# --- Main Content Area ---
 if st.session_state.get('logged_in', False):
-
-    # Initialize state keys
-    for key, default in [ ('meeting_action', "Select Existing Meeting"), ('select_meeting_dropdown', "-- Select --"), ('history_filter_title', ""), ('history_filter_date_from', None), ('history_filter_date_to', None), ('analysis_results_offset', 0), ('analysis_results_limit', DEFAULT_ANALYSIS_LIMIT), ('analysis_results_total_count', 0), ('transcript_raw_text_cache', {}), ('history_meeting_select', "-- Select --"), ('selected_meeting_id_history', None), ]:
+    for key, default in [ ('meeting_action', "Select Existing Meeting"), ('select_meeting_dropdown', "-- Select --"), ('history_filter_title', ""), ('history_filter_date_from', None), ('history_filter_date_to', None), ('history_meeting_select', "-- Select --"), ('selected_meeting_id_history', None), ]:
         if key not in st.session_state: st.session_state[key] = default
 
     just_created_meeting_id = st.session_state.pop('just_created_meeting_id', None)
     if just_created_meeting_id: st.session_state.meeting_action = "Select Existing Meeting"
 
     tab_analysis, tab_history = st.tabs(["✨ New Analysis", "📂 History"])
-
-    # --- New Analysis Tab ---
     with tab_analysis:
         st.header("Submit New Transcript")
         st.subheader("Step 1: Select or Create Meeting")
@@ -220,12 +197,12 @@ if st.session_state.get('logged_in', False):
                 if target_lbl:
                     try:
                         s_idx=opts_list.index(target_lbl)
-                    except:
+                    except ValueError:
                         pass
                 elif st.session_state.select_meeting_dropdown in opts_list:
                     try:
                         s_idx=opts_list.index(st.session_state.select_meeting_dropdown)
-                    except:
+                    except ValueError:
                         pass
                 sel_lbl=st.selectbox("Select Mtg",options=opts_list,index=s_idx,key="select_meeting_dropdown")
                 selected_meeting_id=opts.get(sel_lbl)
@@ -245,8 +222,8 @@ if st.session_state.get('logged_in', False):
                         else: st.error("Create fail.")
                     else: st.warning("Title needed.")
 
-        if selected_meeting_id: # Transcript Submission section
-            st.divider(); st.subheader(f"Step 2: Add Txt to '{selected_meeting_title or f'ID:{selected_meeting_id}'}'")
+        if selected_meeting_id:
+            st.divider(); st.subheader(f"Step 2: Add Tx to '{selected_meeting_title or f'ID:{selected_meeting_id}'}'")
             with st.form("tx_submit_form",clear_on_submit=True):
                 im=st.radio("Input",["Paste","Upload"],key="tx_im",horizontal=True)
                 txt_in=None; file_in=None
@@ -293,8 +270,6 @@ if st.session_state.get('logged_in', False):
 
         else: st.info("Select/Create meeting first.")
 
-
-    # --- History Tab ---
     with tab_history:
         st.header("View History & Analysis")
         st.subheader("Filter Meetings")
@@ -302,9 +277,9 @@ if st.session_state.get('logged_in', False):
         st.session_state.history_filter_date_from=fc2.date_input("From:",key="hf_df",value=st.session_state.history_filter_date_from)
         st.session_state.history_filter_date_to=fc3.date_input("To:",key="hf_dt",value=st.session_state.history_filter_date_to)
 
-        if st.button("🔄 Load / Filter History", key="load_h_btn", use_container_width=True):
-            st.session_state.selected_meeting_id_history=None; st.session_state.analysis_results_offset=0; st.session_state.analysis_results_total_count=0
-            if "history_meeting_select" in st.session_state: st.session_state.history_meeting_select="-- Select --"
+        if st.button("🔄 Load / Filter Meetings", key="load_h_btn", use_container_width=True):
+            st.session_state.selected_meeting_id_history=None
+            st.session_state.history_meeting_select="-- Select --"
             if 'selected_meeting_analyses' in st.session_state: del st.session_state.selected_meeting_analyses
             with st.spinner("Loading..."):
                 params={'limit':500};
@@ -312,10 +287,12 @@ if st.session_state.get('logged_in', False):
                 if st.session_state.history_filter_date_from: params['date_from']=st.session_state.history_filter_date_from.isoformat()
                 if st.session_state.history_filter_date_to: params['date_to']=st.session_state.history_filter_date_to.isoformat()
                 meetings=make_request("GET", "/meetings/", params=params)
-                if isinstance(meetings, list): st.session_state.history_meetings_list=meetings; st.success(f"Loaded {len(meetings)}.")
+                if isinstance(meetings, list): st.session_state.history_meetings_list=meetings; st.success(f"Loaded {len(meetings)} meetings.")
                 else: st.session_state.history_meetings_list=[]; st.warning("Load failed.")
 
         current_selected_meeting_id = None
+        sel_label_hist = None
+
         if 'history_meetings_list' in st.session_state and st.session_state.history_meetings_list:
             meetings_list=st.session_state.history_meetings_list
             try: sm=sorted(meetings_list, key=lambda m:m.get('meeting_date',''), reverse=True)
@@ -326,107 +303,85 @@ if st.session_state.get('logged_in', False):
                 try: mdf=datetime.fromisoformat(mds.replace('Z','+00:00')).strftime('%y-%m-%d %H:%M') if mds else ''
                 except: mdf=mds;
                 label=f"{mt} ({mdf}) ID:{mid}"; opts[label]=mid
-            opts_list=list(opts.keys()); sid=st.session_state.get('selected_meeting_id_history'); cidx=0
-            if sid:
-                try:
-                    sl = next(l for l, i in opts.items() if i == sid)
-                    cidx = opts_list.index(sl)
-                except (StopIteration, ValueError):
-                    st.session_state.selected_meeting_id_history=None
+            opts_list=list(opts.keys()); cidx=0
+            if st.session_state.history_meeting_select in opts_list:
+                try: cidx = opts_list.index(st.session_state.history_meeting_select)
+                except ValueError: st.session_state.history_meeting_select = "-- Select --"
+            else: st.session_state.history_meeting_select = "-- Select --"
 
-            sel_label=st.selectbox("Select Meeting",options=opts_list,index=cidx,key="history_meeting_select")
-            current_selected_meeting_id = opts.get(sel_label)
-
-            if st.session_state.get('selected_meeting_id_history') != current_selected_meeting_id:
-                 st.session_state.analysis_results_offset=0; st.session_state.analysis_results_total_count=0
+            sel_label_hist=st.selectbox("Select Meeting",options=opts_list,index=cidx,key="history_meeting_select")
+            current_selected_meeting_id = opts.get(st.session_state.history_meeting_select)
+            previous_selected_id = st.session_state.get('selected_meeting_id_history')
+            if previous_selected_id != current_selected_meeting_id:
                  if 'selected_meeting_analyses' in st.session_state: del st.session_state.selected_meeting_analyses
-                 if '_cached_analysis_meeting_id' in st.session_state: del st.session_state._cached_analysis_meeting_id
-            st.session_state.selected_meeting_id_history = current_selected_meeting_id
+                 st.session_state.selected_meeting_id_history = current_selected_meeting_id
 
             if current_selected_meeting_id:
                 st.divider()
-                del_col, title_col = st.columns([1,5]); title_col.subheader(f"Analyses for: {sel_label}")
-                # *** CORRECTED DELETE CONFIRMATION LOGIC ***
+                del_col, load_col, title_col = st.columns([1, 2, 4])
+
+                with title_col:
+                    st.subheader(f"Analyses for: {st.session_state.history_meeting_select}")
                 with del_col:
                     del_key=f"del_{current_selected_meeting_id}"; conf_key=f"conf_{current_selected_meeting_id}"
                     if st.button("🗑️",key=del_key,help="Delete Mtg"): st.session_state[conf_key]=True; st.rerun()
-
-                    # Only show confirmation buttons if the key is True
                     if st.session_state.get(conf_key):
                         st.warning("Confirm?")
-                        c1,c2 = st.columns(2) # Define columns INSIDE the if block
+                        c1,c2 = st.columns(2)
                         with c1:
                             if st.button("✅Yes",key=f"ok_{current_selected_meeting_id}"):
                                 with st.spinner("Deleting..."): resp=make_request("DELETE",f"/meetings/{current_selected_meeting_id}/")
-                                if conf_key in st.session_state: del st.session_state[conf_key] # Remove key FIRST
+                                if conf_key in st.session_state: del st.session_state[conf_key]
                                 if resp is True:
                                     st.success("Deleted.")
-                                    # Refresh meeting list state locally and reset selections
-                                    if 'history_meetings_list' in st.session_state:
-                                        st.session_state.history_meetings_list = [m for m in st.session_state.history_meetings_list if m.get('id') != current_selected_meeting_id]
+                                    if 'history_meetings_list' in st.session_state: st.session_state.history_meetings_list = [m for m in st.session_state.history_meetings_list if m.get('id') != current_selected_meeting_id]
                                     st.session_state.selected_meeting_id_history = None
                                     st.session_state.history_meeting_select = "-- Select --"
                                     if 'selected_meeting_analyses' in st.session_state: del st.session_state.selected_meeting_analyses
-                                    if '_cached_analysis_meeting_id' in st.session_state: del st.session_state._cached_analysis_meeting_id
                                     st.rerun()
-                                else:
-                                    st.error("Failed.")
-                                    st.rerun() # Rerun even on failure to clear confirmation
+                                else: st.error("Failed."); st.rerun()
                         with c2:
                             if st.button("❌No",key=f"no_{current_selected_meeting_id}"):
-                                if conf_key in st.session_state: del st.session_state[conf_key] # Remove key on cancel
-                                st.rerun()
-                # *** END CORRECTION ***
+                                if conf_key in st.session_state: del st.session_state[conf_key]; st.rerun()
 
-                # --- Fetch and Display Analysis (Only if NOT confirming delete) ---
-                if not st.session_state.get(conf_key):
-                    cached_mid = st.session_state.get('_cached_analysis_meeting_id')
-                    if cached_mid != current_selected_meeting_id or 'selected_meeting_analyses' not in st.session_state:
-                        anal_ep=f"/analysis/meeting/{current_selected_meeting_id}/"; anal_params={'offset':st.session_state.analysis_results_offset,'limit':st.session_state.analysis_results_limit}
-                        with st.spinner("Fetching results..."): anal_resp=make_request("GET",anal_ep,params=anal_params)
-                        results=[]; total=0
-                        if isinstance(anal_resp,dict) and 'items' in anal_resp: results=anal_resp['items']; total=anal_resp['count']
-                        elif anal_resp: st.warning("Bad analysis format.")
-                        st.session_state.selected_meeting_analyses=results; st.session_state.analysis_results_total_count=total
-                        st.session_state._cached_analysis_meeting_id=current_selected_meeting_id
-                        if not results and anal_resp: st.info("No analysis results for this meeting.")
+                with load_col:
+                    if not st.session_state.get(conf_key):
+                        if st.button(f"📊 Show Analyses", key=f"show_analyses_{current_selected_meeting_id}"):
+                            analysis_endpoint = f"/analysis/meeting/{current_selected_meeting_id}/"
+                            with st.spinner("Fetching all analysis results..."):
+                                analysis_response = make_request("GET", analysis_endpoint)
 
-                    if 'selected_meeting_analyses' in st.session_state and st.session_state.selected_meeting_analyses:
-                        analyses = st.session_state.selected_meeting_analyses; participants=None;
+                                results_list = []
+                                if isinstance(analysis_response, list):
+                                    results_list = analysis_response
+                                elif isinstance(analysis_response, dict) and 'items' in analysis_response:
+                                    results_list = analysis_response['items']
+                                    st.warning(f"API returned paginated data ({len(results_list)} items). Displaying first page. Modify API or frontend loop to get all if needed.")
+                                elif analysis_response is not None:
+                                    st.warning(f"Could not load analysis results. Unexpected format.")
+
+                                st.session_state.selected_meeting_analyses = results_list
+                                if not results_list and analysis_response is not None:
+                                    st.info("No analysis results found for this meeting.")
+
+                if not st.session_state.get(conf_key) and 'selected_meeting_analyses' in st.session_state:
+                    analyses = st.session_state.selected_meeting_analyses;
+                    if analyses:
+                        participants=None;
                         try: meeting=next(m for m in st.session_state.history_meetings_list if m.get('id')==current_selected_meeting_id); participants=meeting.get('participants')
                         except: pass
                         st.write(f"Displaying {len(analyses)} analysis result(s):")
-                        for idx, analysis_result in enumerate(analyses):
+                        sorted_analyses = sorted(analyses, key=lambda x: x.get('created_at', ''), reverse=True)
+                        for idx, analysis_result in enumerate(sorted_analyses):
                             tx_id = analysis_result.get('transcript_id', f'N/A_{idx}')
                             tx_title = analysis_result.get('transcript_title')
                             exp_label = f"Analysis for Tx ID: {tx_id}" + (f' - "{tx_title}"' if tx_title else "")
                             with st.expander(exp_label, expanded=True):
                                 display_analysis_results(analysis_result, participants=participants, include_json_expander=False)
-                                raw_text_visible_key = f"raw_text_visible_{tx_id}"
-                                if raw_text_visible_key not in st.session_state: st.session_state[raw_text_visible_key] = False
-                                if st.button("Show/Hide Raw Tx", key=f"btn_raw_{tx_id}"):
-                                    st.session_state[raw_text_visible_key] = not st.session_state[raw_text_visible_key]
-                                if st.session_state[raw_text_visible_key]:
-                                    raw_text = st.session_state.transcript_raw_text_cache.get(tx_id)
-                                    if raw_text is None: # Fetch if not cached
-                                        with st.spinner(f"Loading raw text (Tx {tx_id})..."):
-                                            tx_details = make_request("GET", f"/transcripts/{tx_id}/")
-                                            if isinstance(tx_details, dict): raw_text = tx_details.get('raw_text') or "_Not found_"
-                                            else: raw_text = "_Error loading_"
-                                            st.session_state.transcript_raw_text_cache[tx_id] = raw_text # Cache result
-                                    st.text_area(f"Raw Text (Tx {tx_id})", value=raw_text, height=200, disabled=True, key=f"text_area_raw_{tx_id}")
                             st.markdown("---")
 
-                        total=st.session_state.analysis_results_total_count; limit=st.session_state.analysis_results_limit; offset=st.session_state.analysis_results_offset
-                        total_p=math.ceil(total/limit); curr_p=(offset//limit)+1
-                        if total_p > 1:
-                            st.write("---"); nc1,nc2,nc3 = st.columns([1,2,1])
-                            if nc1.button("⬅️ Prev", key="prev_a", disabled=(curr_p<=1)): st.session_state.analysis_results_offset=max(0,offset-limit); st.rerun()
-                            nc2.markdown(f"<p style='text-align: center;'>Page {curr_p}/{total_p} ({total})</p>", unsafe_allow_html=True)
-                            if nc3.button("Next ➡️", key="next_a", disabled=(curr_p>=total_p)): st.session_state.analysis_results_offset=offset+limit; st.rerun()
+        elif 'history_meetings_list' in st.session_state:
+             st.info("No meetings match filters.")
 
-        elif 'history_meetings_list' in st.session_state: st.info("No meetings match filters.")
-
-# --- Footer or Initial Message ---
 elif not st.session_state.get('logged_in', False):
     st.info("👋 Welcome! Please log in using the sidebar.")
