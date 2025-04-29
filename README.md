@@ -178,6 +178,47 @@ This project provides a Django Ninja backend API and a Streamlit frontend applic
 
 ## Testing
 
+## Testing
+
+This project includes automated tests for the backend API components and utilities. Manual testing via the API docs and the Streamlit UI is also recommended.
+
+**1. Automated Backend Tests:**
+
+*   The backend uses Django's built-in test framework (`django.test.TestCase`). Tests cover API endpoints (CRUD operations, authentication, error handling) and internal logic (like the analysis task processing).
+*   External dependencies like the LLM service and Celery task execution are mocked during testing to ensure tests are fast and isolated.
+*   **Running Tests:**
+    *   Ensure you have activated your virtual environment and installed all dependencies (`pip install -r requirements.txt`).
+    *   Navigate to the project root directory (containing `manage.py`).
+    *   Run all tests for the entire project:
+        ```bash
+        python manage.py test
+        ```
+    *   Run tests for a specific application (e.g., `meetings`, `transcripts`, `analysis`):
+        ```bash
+        python manage.py test analysis
+        ```
+    *   You should see output indicating the number of tests run and whether they passed (`OK`) or failed.
+
+**2. Manual API Testing:**
+
+*   Use the interactive API documentation available when the Django server is running:
+    *   **Swagger UI:** `http://127.0.0.1:8000/api/docs`
+    *   **ReDoc:** `http://127.0.0.1:8000/api/redoc`
+*   These interfaces allow you to authorize (using a JWT token obtained from login) and send requests to individual API endpoints directly from your browser.
+*   External tools like Postman or Insomnia can also be configured to interact with the API.
+
+**3. Frontend & End-to-End Testing:**
+
+*   Run the Streamlit application (`streamlit run app.py`).
+*   Use the web interface to test the complete user workflows:
+    *   Login and Logout.
+    *   Creating meetings (if exposed in UI).
+    *   Submitting new transcripts (via text paste and file upload).
+    *   Observing status updates for processing transcripts.
+    *   Viewing completed analysis results.
+    *   Navigating history.
+    *   Deleting meetings/transcripts (if applicable).
+
 *   **Manual API Testing:** Use the interactive API documentation (`/api/docs`) to test individual endpoints. Tools like Postman or Insomnia can also be used.
 *   **Frontend Testing:** Use the Streamlit application (`app.py`) to test the end-to-end workflows (login, submission, status polling, history view, deletion).
 
