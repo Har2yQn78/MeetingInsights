@@ -19,7 +19,27 @@ from .auth import AsyncJWTAuth
 router = Router(tags=["analysis"])
 logger = logging.getLogger(__name__)
 
-@router.get("/transcript/{transcript_id}/", response={200: AnalysisResultSchemaOut, 404: ErrorDetail, 503: ErrorDetail})
+@router.get("/transcript/{transcript_id}/", response={200: AnalysisResultSchemaOut, 404: ErrorDetail, 503: ErrorDetail},
+             summary="Get Analysis Results for Transcript", # Added summary
+             description="""
+             Retrieves the completed analysis results (summary, key points, action items) for a specific transcript.
+
+             **Behavior:**
+             - This endpoint checks if an `AnalysisResult` exists for the given `transcript_id`.
+             - **If analysis is complete:** Returns `200 OK` with the analysis details conforming to `AnalysisResultSchemaOut`.
+             - **If analysis is PENDING or PROCESSING:** Returns `503 Service Unavailable` with a message indicating the analysis is
+              not yet ready and the client should try again later. This prevents polling clients from receiving a misleading 404 while processing is ongoing.
+             - **If analysis FAILED:** Returns `404 Not Found` with a message indicating the failure 
+             (users should check the transcript status endpoint for error details).
+             - **If the transcript itself doesn't exist:** Returns `404 Not Found`.
+
+             **Details:**
+             - This is an asynchronous endpoint (uses `async def`).
+             - Does **not** require authentication by default in the provided code snippet (no `auth=` argument shown).
+              Consider adding `auth=AsyncJWTAuth()` if access should be restricted.
+             - Uses the `transcript_id` provided in the URL path.
+             """
+             )
 async def get_transcript_analysis(request, transcript_id: int):
     try:
         analysis = await sync_to_async(get_object_or_404)(AnalysisResult.objects.select_related('transcript'), transcript_id=transcript_id)
@@ -43,7 +63,28 @@ async def get_transcript_analysis(request, transcript_id: int):
 
 
 
-@router.get("/meeting/{meeting_id}/", response={200: PaginatedAnalysisResponse, 404: ErrorDetail}, auth=AsyncJWTAuth())
+@router.get("/meeting/{meeting_id}/", response={200: PaginatedAnalysisResponse, 404: ErrorDetail}, auth=AsyncJWTAuth(),
+            summary="List Analysis Results for Meeting", # Added summary
+            description="""
+            Retrieves a paginated list of completed analysis results for all transcripts associated with a specific meeting.
+
+            **Details:**
+            - Requires authentication via JWT (using asynchronous authentication).
+            - Uses the `meeting_id` provided in the URL path.
+            - Returns analysis results ordered by creation date (most recent first).
+            - Supports pagination via `offset` and `limit` query parameters.
+
+            **Pagination Query Parameters:**
+            - `offset`: The number of analysis results to skip (default: 0).
+            - `limit`: The maximum number of analysis results to return per page (default: 5).
+
+            **Response Format:**
+            - Conforms to `PaginatedAnalysisResponse`, including `count`, `offset`, `limit`, and a list of `items` (each conforming to `AnalysisResultSchemaOut`).
+
+            **On Success:** Returns `200 OK` with the paginated list of analysis results.
+            **On Failure:** Returns `404 Not Found` if the specified `meeting_id` does not correspond to an existing meeting.
+            """
+            )
 async def get_meeting_analysis(request, meeting_id: int, offset: int = 0, limit: int = 5):
     await sync_to_async(get_object_or_404)(Meeting, id=meeting_id)
     results_qs = AnalysisResult.objects.filter(transcript__meeting_id=meeting_id).select_related('transcript').order_by('-created_at')
@@ -51,7 +92,36 @@ async def get_meeting_analysis(request, meeting_id: int, offset: int = 0, limit:
     items_list = await sync_to_async(list)(results_qs[offset : offset + limit])
     return PaginatedAnalysisResponse(count=total_count, offset=offset, limit=limit, items=items_list)
 
-@router.post("/generate/{transcript_id}/", response={202: TranscriptStatusSchemaOut, 400: ErrorDetail, 404: ErrorDetail, 409: ErrorDetail}, tags=["analysis", "async"], auth=AsyncJWTAuth())
+@router.post("/generate/{transcript_id}/", response={202: TranscriptStatusSchemaOut, 400: ErrorDetail, 404: ErrorDetail, 409: ErrorDetail}, tags=["analysis", "async"], auth=AsyncJWTAuth(),
+             summary="Trigger/Re-trigger Transcript Analysis", # Added summary
+             description="""
+             Manually triggers (or re-triggers) the asynchronous analysis task for a specific transcript.
+
+             **Use Cases:**
+             - Initiate analysis if it wasn't triggered automatically on submission.
+             - Re-run analysis if the previous attempt failed.
+             - Re-run analysis if the underlying transcript text or analysis logic has changed.
+
+             **Pre-conditions & Checks:**
+             - Requires authentication via JWT (using asynchronous authentication).
+             - Checks if the specified `transcript_id` exists.
+             - Checks if the transcript has content (either `raw_text` or an associated `original_file`).
+             - Checks if the transcript is already `COMPLETED`, `PROCESSING`, or `PENDING` with an active task ID.
+
+             **Workflow:**
+             1. Performs the pre-condition checks.
+             2. If valid, queues the `process_transcript_analysis` Celery task.
+             3. Updates the transcript's status to `PENDING` and saves the new Celery task ID.
+
+             **On Success:** Returns `202 Accepted` with the transcript's updated status details (showing `PENDING` and the new task ID)
+              conforming to `TranscriptStatusSchemaOut`. This indicates the request to start analysis was accepted; completion is asynchronous.
+             **On Failure:**
+                 - Returns `404 Not Found` if the transcript does not exist.
+                 - Returns `400 Bad Request` if the transcript has no content to analyze (status will be set to `FAILED`).
+                 - Returns `409 Conflict` if the analysis is already completed, processing, or pending.
+                 - Returns `500 Internal Server Error` if task queueing or status updates fail unexpectedly.
+             """
+             )
 async def generate_analysis(request, transcript_id: int):
     transcript = await get_transcript_for_analysis(transcript_id)
     if transcript is None:
