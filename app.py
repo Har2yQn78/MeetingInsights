@@ -44,7 +44,6 @@ def login(username, password):
 def refresh_token():
     api_base = st.session_state.get("api_base_url", "http://127.0.0.1:8000/api")
     if 'refresh_token' not in st.session_state:
-        st.warning("No refresh token available. Please log in again.")
         logout(silent=True)
         return False
     try:
@@ -99,15 +98,17 @@ def get_headers(include_content_type=True):
 
 def make_request(method, endpoint, json_data=None, data=None, files=None, params=None, timeout=30, suppress_errors=False, **kwargs):
     api_base = st.session_state.get("api_base_url", "http://127.0.0.1:8000/api")
+    if not st.session_state.get('logged_in', False):
+        if not suppress_errors:
+            st.warning("Not logged in. Please log in first.")
+        return None
     if not ensure_authenticated():
         if not suppress_errors:
-             st.warning("Authentication failed or expired. Please log in.")
+            st.warning("Authentication failed or expired. Please log in.")
         return None
-
     include_content_type_header = json_data is not None and not files and not data
     headers = get_headers(include_content_type=include_content_type_header)
     if headers is None: return None
-
     req_params = params if params is not None else {}
     if method.upper() == 'GET' and json_data:
         req_params.update(json_data)
@@ -123,8 +124,10 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, params
         )
 
         if response.status_code == 401 and attempt_refresh:
+            st.warning("Token may have expired. Attempting refresh...")
             refreshed = refresh_token()
             if refreshed:
+                st.info("Token refreshed successfully. Retrying request...")
                 headers = get_headers(include_content_type=include_content_type_header)
                 if headers:
                     response = requests.request(
@@ -140,13 +143,14 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, params
                      return None
             else:
                 return None
-
         response.raise_for_status()
 
+        # Handle successful responses
         if response.status_code == 204: return True
         elif response.status_code in [200, 201, 202]:
             if response.text:
-                try: return response.json()
+                try:
+                    return response.json()
                 except json.JSONDecodeError:
                     if not suppress_errors: st.warning(f"API returned non-JSON response (Status: {response.status_code}).")
                     return response.text
@@ -157,17 +161,28 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, params
             return response.text if response.text else True
 
     except requests.exceptions.HTTPError as e:
-        if not suppress_errors:
-            st.error(f"HTTP Error: {e}" + (f" (Status: {e.response.status_code})" if e.response else ""))
-            if e.response:
-                try:
-                    err_data = e.response.json()
-                    detail = err_data.get('detail', json.dumps(err_data))
-                    if isinstance(detail, list): detail = "; ".join(map(str, detail))
-                    elif not isinstance(detail, str): detail = json.dumps(detail)
-                    st.error(f"Detail: {detail}")
-                except json.JSONDecodeError:
-                    st.error(f"Raw Error: {e.response.text[:500]}...")
+        if e.response is not None:
+            status_code = e.response.status_code
+            if status_code == 401:
+                if not suppress_errors: st.error(f"Authentication error (Status: {status_code}). Please log in again.")
+                logout()
+            elif status_code == 403:
+                if not suppress_errors: st.error(f"Permission Denied (Status: {status_code}). You may not have access to this resource.")
+            elif status_code == 404:
+                 if not suppress_errors: st.error(f"Resource Not Found (Status: {status_code}) at {url}.")
+            else:
+                if not suppress_errors:
+                    st.error(f"HTTP Error: {e} (Status: {status_code})")
+                    try:
+                        err_data = e.response.json()
+                        detail = err_data.get('detail', json.dumps(err_data))
+                        if isinstance(detail, list): detail = "; ".join(map(str, detail))
+                        elif not isinstance(detail, str): detail = json.dumps(detail)
+                        st.error(f"API Detail: {detail}")
+                    except json.JSONDecodeError:
+                        st.error(f"Raw Error Response: {e.response.text[:500]}...")
+        else:
+             if not suppress_errors: st.error(f"HTTP Error: {e}")
         return None
     except requests.exceptions.ConnectionError as e:
         if not suppress_errors: st.error(f"Connection Error: Could not connect to API at {api_base}. Details: {e}")
@@ -176,11 +191,12 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, params
         if not suppress_errors: st.error(f"Request Timeout: The API did not respond within {timeout} seconds. Details: {e}")
         return None
     except requests.exceptions.RequestException as e:
-        if not suppress_errors: st.error(f"Request Failed: An ambiguous request error occurred. Details: {e}")
+        if not suppress_errors: st.error(f"Request Failed: An unexpected request error occurred. Details: {e}")
         return None
     except Exception as e:
-        if not suppress_errors: st.error(f"An unexpected error occurred in make_request: {e}")
-        st.error(traceback.format_exc())
+        if not suppress_errors:
+             st.error(f"An unexpected error occurred in make_request: {type(e).__name__} - {e}")
+             st.error(traceback.format_exc())
         return None
 
 def display_analysis_results(result, participants: Optional[List[Any]] = None, include_json_expander=True):
@@ -191,12 +207,13 @@ def display_analysis_results(result, participants: Optional[List[Any]] = None, i
 
     tx_id = result.get('transcript_id', 'N/A')
     tx_title = result.get('transcript_title')
-
-    st.markdown(f"**Transcript ID:** `{tx_id}`" + (f" | **Title:** *{tx_title}*" if tx_title else ""))
-
+    title_str = f"**Transcript ID:** `{tx_id}`"
+    if tx_title:
+        title_str += f" | **Title:** *{tx_title}*"
     col1, col2 = st.columns([2, 1])
 
     with col1:
+        st.markdown(title_str)
         st.subheader("📝 Summary")
         st.markdown(result.get('summary') or "_No summary provided._")
         st.subheader("📌 Key Points")
@@ -218,10 +235,18 @@ def display_analysis_results(result, participants: Optional[List[Any]] = None, i
              deadline_str = deadline
              if deadline:
                  try:
-                     deadline_dt = datetime.strptime(str(deadline), "%Y-%m-%d").date()
-                     deadline_str = deadline_dt.strftime("%B %d, %Y")
-                 except (ValueError, TypeError):
-                     st.warning(f"Could not parse deadline format: {deadline}")
+                     if isinstance(deadline, str):
+                        deadline = deadline.replace('Z', '+00:00')
+                        if 'T' in deadline:
+                           deadline_dt = datetime.fromisoformat(deadline).date()
+                        else:
+                           deadline_dt = datetime.strptime(deadline, "%Y-%m-%d").date()
+                        deadline_str = deadline_dt.strftime("%B %d, %Y")
+                     elif isinstance(deadline, date):
+                        deadline_str = deadline.strftime("%B %d, %Y")
+                     # Add other type checks if necessary
+                 except (ValueError, TypeError) as e:
+                     st.warning(f"Could not parse deadline format: {deadline} ({type(deadline)}). Error: {e}")
                      deadline_str = str(deadline)
              st.markdown(f"**Deadline:** {deadline_str or '_N/A_'}")
         else:
@@ -233,7 +258,7 @@ def display_analysis_results(result, participants: Optional[List[Any]] = None, i
         st.caption("---")
         ts_created = result.get('created_at')
         ts_updated = result.get('updated_at')
-        dt_created = None
+        dt_created, dt_updated = None, None
         try:
             if ts_created:
                 dt_created = datetime.fromisoformat(str(ts_created).replace('Z','+00:00'))
@@ -251,45 +276,47 @@ def display_analysis_results(result, participants: Optional[List[Any]] = None, i
 
 def display_chatbot_interface(transcript_id):
     st.divider()
-    st.subheader(f"💬 Ask a Question about Transcript {transcript_id}")
-    qa_form_key = f"qa_form_{transcript_id}"
-    qa_input_key = f"qa_input_{transcript_id}"
-    last_q_key = f'last_question_{transcript_id}'
-    last_a_key = f'last_answer_{transcript_id}'
-    last_e_key = f'last_error_{transcript_id}'
-
-    with st.form(qa_form_key, clear_on_submit=False):
-        user_question = st.text_input("Your Question:", key=qa_input_key, value=st.session_state.get(last_q_key, ""))
+    st.subheader(f"💬 Ask a Question about Transcript `{transcript_id}`")
+    chat_base_key = f"chat_{transcript_id}"
+    qa_form_key = f"{chat_base_key}_form"
+    qa_input_key = f"{chat_base_key}_input"
+    if chat_base_key not in st.session_state:
+        st.session_state[chat_base_key] = {"history": []}
+    with st.form(qa_form_key, clear_on_submit=True):
+        user_question = st.text_input("Your Question:", key=qa_input_key, label_visibility="collapsed", placeholder="Ask something about the transcript...")
         submit_qa = st.form_submit_button("Ask")
 
         if submit_qa and user_question:
-            st.session_state[last_q_key] = user_question
             with st.spinner("Thinking..."):
                 qa_payload = {"question": user_question}
                 answer_resp = make_request("POST", f"/chatbot/ask/{transcript_id}/", json_data=qa_payload, timeout=90)
 
+                qa_result = {"q": user_question}
                 if isinstance(answer_resp, dict) and 'answer' in answer_resp:
-                    st.session_state[last_a_key] = answer_resp['answer']
-                    st.session_state[last_e_key] = None
+                    qa_result["a"] = answer_resp['answer']
                 else:
-                     st.session_state[last_a_key] = None
-                     st.session_state[last_e_key] = "Failed to get an answer from the API."
+                     error_detail = "Failed to get an answer from the API."
+                     if answer_resp is None and not ensure_authenticated():
+                         error_detail = "Authentication error. Please log in again."
+                     elif isinstance(answer_resp, str):
+                         error_detail = f"API Error: {answer_resp}"
+
+                     qa_result["e"] = error_detail
+                st.session_state[chat_base_key]["history"].insert(0, qa_result)
             st.rerun()
-
-    last_q = st.session_state.get(last_q_key)
-    last_a = st.session_state.get(last_a_key)
-    last_e = st.session_state.get(last_e_key)
-
-    if last_q:
-        st.markdown(f"**Your Question:** {last_q}")
-        if last_a:
-            st.markdown("**Answer:**")
-            st.info(last_a)
-        elif last_e:
-            st.error(last_e)
-
+    chat_history = st.session_state[chat_base_key]["history"]
+    if chat_history:
+        st.markdown("**Chat History:**")
+        with st.container(height=400):
+            for item in chat_history:
+                st.markdown(f"> **Q:** {item['q']}")
+                if item.get('a'):
+                    st.info(f"{item['a']}")
+                elif item.get('e'):
+                    st.error(f"**Error:** {item['e']}")
+                st.caption(f"_{datetime.now().strftime('%H:%M:%S')}_")
+                st.markdown("---")
 st.title("🗣️ Meeting Analysis & Q&A")
-
 with st.sidebar:
     st.subheader("Authentication")
     if st.session_state.get('logged_in', False):
@@ -299,9 +326,14 @@ with st.sidebar:
                 remaining_time = st.session_state.token_expiry - datetime.now()
                 if remaining_time.total_seconds() > 0:
                     mins = int(remaining_time.total_seconds() // 60)
-                    st.caption(f"Session valid for approx. {mins} min")
-            except: pass
-        if st.button("Logout", key="logout_button"):
+                    secs = int(remaining_time.total_seconds() % 60)
+                    st.caption(f"Session valid for approx. {mins} min {secs} sec")
+                else:
+                    st.caption("Session expired. Refreshing...")
+                    ensure_authenticated()
+            except Exception as e:
+                st.caption(f"Error checking token expiry: {e}")
+        if st.button("Logout", key="logout_button", type="primary"):
             logout()
     else:
         with st.form("login_form"):
@@ -314,93 +346,102 @@ with st.sidebar:
 
 if st.session_state.get('logged_in', False):
     default_session_keys = {
-        'meeting_action': "Select Existing Meeting",
-        'select_meeting_dropdown': "-- Select --",
+        'meeting_action_radio': "Select Existing Meeting",
+        'select_meeting_dropdown_analysis': "-- Select --",
+        'analysis_tab_meetings_list': None,
+        'current_analysis_job': None,
+        'current_analysis_result': None,
+        'current_qna_status': None,
         'history_filter_title': "",
         'history_filter_date_from': None,
         'history_filter_date_to': None,
+        'history_meetings_list': None,
         'history_meeting_select': "-- Select --",
         'selected_meeting_id_history': None,
-        'analysis_tab_meetings_list': None,
-        'history_meetings_list': None,
         'selected_meeting_analyses': None,
-        'chatbot_statuses': {},
+        'history_confirm_delete': None,
+        'qanda_meetings_list': None,
+        'qanda_meeting_select': "-- Select --",
+        'qanda_selected_meeting_id': None,
+        'qanda_available_transcripts': None,
+        'qanda_transcript_select': "-- Select --",
+        'qanda_selected_transcript_id': None,
+        'qanda_selected_transcript_status': None,
     }
     for key, default in default_session_keys.items():
         if key not in st.session_state:
             st.session_state[key] = default
     just_created_meeting_id = st.session_state.pop('just_created_meeting_id', None)
     if just_created_meeting_id:
-        st.session_state.meeting_action = "Select Existing Meeting"
+        st.session_state.meeting_action_radio = "Select Existing Meeting"
         st.session_state.analysis_tab_meetings_list = None
-        st.success(f"Meeting ID {just_created_meeting_id} created. Select it below.")
-    tab_analysis, tab_history = st.tabs(["✨ New Analysis", "📂 History / Q&A"])
+        st.session_state.history_meetings_list = None
+        st.session_state.qanda_meetings_list = None
+        st.success(f"Meeting ID {just_created_meeting_id} created. You can now select it.")
+
+    tab_analysis, tab_history, tab_qanda = st.tabs(["✨ New Analysis", "📂 History", "💬 Q&A"])
     with tab_analysis:
         st.header("Submit New Transcript for Analysis")
         st.subheader("Step 1: Select or Create Meeting")
-        meeting_action = st.radio(
-            "Choose Action:",
-            ["Select Existing Meeting", "Create New Meeting"],
-            key="meeting_action",
-            horizontal=True
-        )
-        selected_meeting_id = None
-        selected_meeting_title = None
-        if st.session_state.meeting_action == "Select Existing Meeting":
-            if st.session_state.analysis_tab_meetings_list is None:
-                with st.spinner("Loading meetings..."):
-                    meetings = make_request("GET","/meetings/", params={"limit": 500})
-                    if isinstance(meetings, list):
-                        st.session_state.analysis_tab_meetings_list = meetings
-                    else:
-                        st.session_state.analysis_tab_meetings_list = []
-                        st.warning("Could not load meetings.")
+        col1_meeting, col2_meeting = st.columns(2)
+        with col1_meeting:
+            st.radio(
+                "Choose Action:",
+                ["Select Existing Meeting", "Create New Meeting"],
+                key="meeting_action_radio",
+                horizontal=True,
+                label_visibility="collapsed"
+            )
 
-            meetings_list = st.session_state.analysis_tab_meetings_list
-            if meetings_list:
-                try: sorted_meetings = sorted(meetings_list, key=lambda m: m.get('meeting_date', ''), reverse=True)
-                except: sorted_meetings = meetings_list
+        selected_meeting_id_analysis = None
+        selected_meeting_title_analysis = None
+        if st.session_state.meeting_action_radio == "Select Existing Meeting":
+            with col2_meeting:
+                if st.session_state.analysis_tab_meetings_list is None:
+                    with st.spinner("Loading meetings..."):
+                        meetings = make_request("GET","/meetings/", params={"limit": 500, "ordering": "-meeting_date"})
+                        if isinstance(meetings, list):
+                            st.session_state.analysis_tab_meetings_list = meetings
+                        else:
+                            st.session_state.analysis_tab_meetings_list = []
 
-                meeting_options = {"-- Select --": None}
-                for m in sorted_meetings:
-                    m_id, m_title, m_date_str = m.get('id'), m.get('title', 'Untitled'), m.get('meeting_date', '')
-                    try: m_date_formatted = datetime.fromisoformat(m_date_str.replace('Z','+00:00')).strftime('%Y-%m-%d %H:%M') if m_date_str else 'No Date'
-                    except: m_date_formatted = m_date_str
-                    label = f"{m_title} ({m_date_formatted}) - ID:{m_id}"
-                    meeting_options[label] = m_id
+                meetings_list = st.session_state.analysis_tab_meetings_list
+                if meetings_list:
+                    meeting_options = {"-- Select --": None}
+                    for m in meetings_list:
+                        m_id, m_title, m_date_str = m.get('id'), m.get('title', 'Untitled'), m.get('meeting_date', '')
+                        try: m_date_formatted = datetime.fromisoformat(m_date_str.replace('Z','+00:00')).strftime('%Y-%m-%d %H:%M') if m_date_str else 'No Date'
+                        except: m_date_formatted = m_date_str if m_date_str else "Invalid Date"
+                        label = f"{m_title} ({m_date_formatted}) - ID:{m_id}"
+                        meeting_options[label] = m_id
 
-                options_list = list(meeting_options.keys())
-                current_selection_label = st.session_state.select_meeting_dropdown
-                selected_index = 0
-                if current_selection_label in options_list:
-                     try: selected_index = options_list.index(current_selection_label)
-                     except ValueError: st.session_state.select_meeting_dropdown = "-- Select --"
+                    selected_label = st.selectbox("Select Meeting:", options=list(meeting_options.keys()),
+                                                  key="select_meeting_dropdown_analysis", label_visibility="collapsed")
+                    selected_meeting_id_analysis = meeting_options.get(selected_label)
+                    if selected_meeting_id_analysis:
+                        selected_meeting_title_analysis = selected_label.split(" (")[0]
+                elif isinstance(meetings_list, list):
+                    st.info("No meetings found. Create one below.")
 
-                selected_label = st.selectbox("Select Meeting:", options=options_list, index=selected_index, key="select_meeting_dropdown")
-                selected_meeting_id = meeting_options.get(selected_label)
-                if selected_meeting_id: selected_meeting_title = selected_label.split(" (")[0]
-            else:
-                st.info("No meetings found. You can create a new one.")
-        elif st.session_state.meeting_action == "Create New Meeting":
-             with st.form("create_meeting_form"):
-                new_title = st.text_input("New Meeting Title*", key="new_meeting_title_input")
-                submitted_create = st.form_submit_button("Create Meeting")
-                if submitted_create:
-                    if new_title.strip():
-                        with st.spinner("Creating meeting..."):
-                            create_payload = {"title": new_title.strip()}
-                            response = make_request("POST", "/meetings/", json_data=create_payload)
-                        if isinstance(response, dict) and 'id' in response:
-                            st.success(f"Meeting '{response.get('title')}' created (ID: {response['id']}).")
-                            if st.session_state.analysis_tab_meetings_list is None: st.session_state.analysis_tab_meetings_list = []
-                            st.session_state.analysis_tab_meetings_list.append(response)
-                            st.session_state.just_created_meeting_id = response['id']
-                            st.rerun()
-                        else: st.error("Failed to create meeting.")
-                    else: st.warning("Meeting title cannot be empty.")
-        if selected_meeting_id:
-            st.divider()
-            st.subheader(f"Step 2: Add Transcript to '{selected_meeting_title or f'Meeting ID:{selected_meeting_id}'}'")
+        elif st.session_state.meeting_action_radio == "Create New Meeting":
+             with col2_meeting:
+                 with st.form("create_meeting_form"):
+                    new_title = st.text_input("New Meeting Title*", key="new_meeting_title_input")
+                    submitted_create = st.form_submit_button("Create Meeting")
+                    if submitted_create:
+                        if new_title.strip():
+                            with st.spinner("Creating meeting..."):
+                                create_payload = {"title": new_title.strip()}
+                                response = make_request("POST", "/meetings/", json_data=create_payload)
+                            if isinstance(response, dict) and 'id' in response:
+                                st.session_state.just_created_meeting_id = response['id']
+                                st.rerun()
+                        else:
+                            st.warning("Meeting title cannot be empty.")
+
+        st.divider()
+        if selected_meeting_id_analysis and not st.session_state.current_analysis_job:
+            st.subheader(f"Step 2: Add Transcript to '{selected_meeting_title_analysis or f'Meeting ID:{selected_meeting_id_analysis}'}'")
 
             with st.form("transcript_submit_form", clear_on_submit=True):
                 input_method = st.radio("Input Method:", ["Paste Text", "Upload File"], key="transcript_input_method", horizontal=True)
@@ -408,261 +449,407 @@ if st.session_state.get('logged_in', False):
                 uploaded_file_input = None
 
                 if input_method == "Paste Text":
-                    transcript_text_input = st.text_area("Paste Transcript Text Here:", height=200, key="transcript_raw_text_input")
+                    transcript_text_input = st.text_area("Paste Transcript Text Here:", height=200, key="transcript_raw_text_input", placeholder="Paste the full meeting transcript here...")
                 else:
                     uploaded_file_input = st.file_uploader("Upload Transcript File:", type=['txt', 'pdf', 'md', 'docx'], key="transcript_file_uploader")
 
                 submit_transcript = st.form_submit_button("🚀 Submit for Analysis")
 
                 if submit_transcript:
+                    st.session_state.current_analysis_job = None
+                    st.session_state.current_analysis_result = None
+                    st.session_state.current_qna_status = None
+
                     api_endpoint, request_payload, request_files = None, None, None
                     if input_method == "Paste Text":
                         if transcript_text_input and transcript_text_input.strip():
-                            api_endpoint, request_payload = f"/transcripts/{selected_meeting_id}/", {'raw_text': transcript_text_input}
-                        else: st.warning("Pasted text cannot be empty.")
+                            api_endpoint = f"/transcripts/{selected_meeting_id_analysis}/"
+                            request_payload = {'raw_text': transcript_text_input}
+                        else:
+                            st.warning("Pasted text cannot be empty.")
                     elif input_method == "Upload File":
                         if uploaded_file_input:
-                            api_endpoint, request_files = f"/transcripts/{selected_meeting_id}/upload/", {'file': (uploaded_file_input.name, uploaded_file_input.getvalue(), uploaded_file_input.type)}
-                        else: st.warning("Please upload a file.")
+                            api_endpoint = f"/transcripts/{selected_meeting_id_analysis}/upload/"
+                            file_content = uploaded_file_input.getvalue()
+                            request_files = {'file': (uploaded_file_input.name, file_content, uploaded_file_input.type)}
+                        else:
+                            st.warning("Please upload a file.")
 
                     if api_endpoint and (request_payload or request_files):
-                        with st.spinner("Submitting transcript..."):
-                            submission_response = make_request("POST", api_endpoint, json_data=request_payload, files=request_files)
+                        with st.spinner("Submitting transcript... This may take a moment."):
+                            submission_response = make_request("POST", api_endpoint, json_data=request_payload, files=request_files, timeout=120)
 
                         if isinstance(submission_response, dict) and 'id' in submission_response:
                             transcript_id = submission_response['id']
-                            initial_analysis_status = submission_response['processing_status']
-                            meeting_id_from_resp = submission_response.get('meeting_id')
-                            st.success(f"✅ Transcript submitted successfully (ID: {transcript_id}). Analysis queued.")
-                            st.info(f"Initial Analysis Status: {initial_analysis_status}")
-                            analysis_status_placeholder = st.status(f"Processing Analysis for Transcript {transcript_id}...", expanded=True)
-                            max_analysis_attempts, polling_interval = 60, 5
-                            analysis_attempt = 0
-                            analysis_completed = False
-                            final_analysis_result, final_meeting_participants = None, None
-                            current_analysis_status = initial_analysis_status
-                            while analysis_attempt < max_analysis_attempts and not analysis_completed:
-                                analysis_attempt += 1; time.sleep(polling_interval)
-                                analysis_status_placeholder.write(f"Checking analysis status (Attempt {analysis_attempt}/{max_analysis_attempts})...")
-                                status_response = make_request("GET", f"/transcripts/status/{transcript_id}/", suppress_errors=True)
-                                if isinstance(status_response, dict) and 'processing_status' in status_response:
-                                    current_analysis_status = status_response['processing_status']
-                                    if not meeting_id_from_resp: meeting_id_from_resp = status_response.get('meeting_id')
-                                    analysis_status_placeholder.update(label=f"Tx {transcript_id}: Analysis Status - {current_analysis_status}")
-                                    if current_analysis_status == "COMPLETED":
-                                        analysis_completed = True
-                                        analysis_status_placeholder.write("Analysis complete! Fetching results...")
-                                        analysis_result_response = make_request("GET", f"/analysis/transcript/{transcript_id}/")
-                                        if isinstance(analysis_result_response, dict):
-                                            final_analysis_result = analysis_result_response
-                                            analysis_status_placeholder.write("Analysis results received.")
-                                            if meeting_id_from_resp:
-                                                 meeting_details = make_request("GET", f"/meetings/{meeting_id_from_resp}/")
-                                                 final_meeting_participants = meeting_details.get('participants') if isinstance(meeting_details, dict) else None
-                                            analysis_status_placeholder.update(label="Analysis Complete!", state="complete", expanded=False)
-                                            st.success("📊 Analysis processing finished.")
-                                        else:
-                                            st.error("Failed to fetch completed analysis results.")
-                                            analysis_status_placeholder.error("Failed to fetch analysis results.")
-                                            analysis_status_placeholder.update(label="Error Fetching Results", state="error")
-                                    elif current_analysis_status == "FAILED":
-                                        error_msg = status_response.get('processing_error', 'Unknown error')
-                                        st.error(f"Analysis process failed for Transcript {transcript_id}.")
-                                        analysis_status_placeholder.error(f"Analysis Failed: {error_msg}")
-                                        analysis_status_placeholder.update(label="Analysis Failed", state="error")
-                                        analysis_completed = True
-                                    elif current_analysis_status not in ["PENDING", "PROCESSING"]:
-                                        st.warning(f"Unknown analysis status: {current_analysis_status}")
-                                        analysis_status_placeholder.update(label=f"Unknown Status: {current_analysis_status}", state="error")
-                                        analysis_completed = True
-                                else:
-                                    analysis_status_placeholder.warning(f"Analysis status check failed (Attempt {analysis_attempt}). Retrying...")
-                                    if analysis_attempt > 5 and status_response is None:
-                                         analysis_status_placeholder.error("Analysis status check failed repeatedly.")
-                                         analysis_status_placeholder.update(label="Error Checking Status", state="error")
-                                         analysis_completed = True
+                            initial_status = submission_response.get('processing_status', 'PENDING')
+                            st.success(f"✅ Transcript submitted (ID: {transcript_id}). Analysis queued.")
+                            st.info(f"Initial Status: {initial_status}. Polling for updates...")
+                            st.session_state.current_analysis_job = {
+                                'transcript_id': transcript_id,
+                                'status': initial_status,
+                                'start_time': time.time(),
+                                'meeting_id': selected_meeting_id_analysis
+                            }
+                            st.session_state.history_meetings_list = None
+                            st.session_state.selected_meeting_analyses = None
+                            st.session_state.qanda_meetings_list = None
+                            st.session_state.qanda_available_transcripts = None
+                            st.rerun()
 
-                            if analysis_attempt >= max_analysis_attempts and not analysis_completed:
-                                st.warning(f"Analysis polling timed out.")
-                                analysis_status_placeholder.warning(f"Polling Timeout. Status: {current_analysis_status}")
-                                analysis_status_placeholder.update(label="Analysis Polling Timeout", state="warning")
+        elif not selected_meeting_id_analysis and not st.session_state.current_analysis_job :
+             st.info("Select or create a meeting above to submit a transcript.")
+        if st.session_state.current_analysis_job:
+            job = st.session_state.current_analysis_job
+            transcript_id = job['transcript_id']
+            current_status = job['status']
+            MAX_POLL_TIME_SEC = 300
+            POLLING_INTERVAL_SEC = 5
 
-                            if final_analysis_result:
-                                display_analysis_results(final_analysis_result, participants=final_meeting_participants)
-                                st.divider(); st.subheader("Q&A Status")
-                                embedding_status_placeholder = st.empty()
-                                embedding_status_placeholder.info("Checking Q&A availability...")
-                                embed_stat_resp = make_request("GET", f"/chatbot/status/{transcript_id}/", suppress_errors=True)
-                                if isinstance(embed_stat_resp, dict) and 'embedding_status' in embed_stat_resp:
-                                    embedding_status = embed_stat_resp['embedding_status']
-                                    if embedding_status == "COMPLETED":
-                                        embedding_status_placeholder.success("✅ Q&A is ready!")
-                                        display_chatbot_interface(transcript_id)
-                                    elif embedding_status in ["PENDING", "PROCESSING", "NONE"]:
-                                         embedding_status_placeholder.info(f"⏳ Q&A preparing... (Status: {embedding_status})")
-                                    elif embedding_status == "FAILED":
-                                         embedding_status_placeholder.error("❌ Q&A preparation failed.")
-                                    else: embedding_status_placeholder.warning(f"❓ Unknown Q&A status: {embedding_status}")
-                                else: embedding_status_placeholder.warning("⚠️ Could not check Q&A status.")
+            analysis_status_placeholder = st.empty()
+            qna_status_placeholder = st.empty()
+            if current_status in ["PENDING", "PROCESSING"]:
+                if time.time() - job.get('analysis_start_time', job['start_time']) > MAX_POLL_TIME_SEC:
+                    st.warning(f"Analysis polling timed out after {MAX_POLL_TIME_SEC} seconds.")
+                    job['status'] = "ANALYSIS_TIMED_OUT"
+                    st.rerun()
+                else:
+                    with analysis_status_placeholder.container():
+                        with st.spinner(f"Analyzing Transcript `{transcript_id}`... Status: {current_status}"):
+                            status_response = make_request("GET", f"/transcripts/status/{transcript_id}/", suppress_errors=True)
+                            if isinstance(status_response, dict) and 'processing_status' in status_response:
+                                new_status = status_response['processing_status']
+                            if new_status != current_status:
+                                job['status'] = new_status
+                                if new_status == "COMPLETED":
+                                    st.info("Analysis complete. Fetching results...")
+                                    analysis_result_response = make_request("GET", f"/analysis/transcript/{transcript_id}/")
+                                    if isinstance(analysis_result_response, dict):
+                                        st.session_state.current_analysis_result = analysis_result_response
+                                        job['status'] = "CHECKING_QNA"
+                                        job['qna_check_start_time'] = time.time()
+                                    else:
+                                        st.error("Analysis completed, but failed to fetch results.")
+                                        job['status'] = "ANALYSIS_FAILED_POST"
+                                elif new_status == "FAILED":
+                                    error_msg = status_response.get('processing_error', 'Unknown error during analysis')
+                                    st.error(f"Analysis Failed: {error_msg}")
+                                    job['status'] = "ANALYSIS_FAILED"
+                            time.sleep(POLLING_INTERVAL_SEC)
+                            st.rerun()
 
-                            elif not analysis_completed and current_analysis_status != "FAILED":
-                                 st.error("Analysis did not complete. Cannot display results or Q&A.")
+            elif current_status == "CHECKING_QNA":
+                qna_start_time = job.get('qna_check_start_time', job['start_time'])
+                if time.time() - qna_start_time > MAX_POLL_TIME_SEC:
+                     st.warning(f"Q&A status polling timed out after {MAX_POLL_TIME_SEC} seconds.")
+                     job['status'] = "QNA_TIMED_OUT"
+                     st.rerun()
+                else:
+                    with qna_status_placeholder.container():
+                        with st.spinner(f"Preparing Q&A for Transcript `{transcript_id}`..."):
+                            embed_stat_resp = make_request("GET", f"/chatbot/status/{transcript_id}/", suppress_errors=True)
+                            qna_status = "PENDING"
+                            if isinstance(embed_stat_resp, dict) and 'embedding_status' in embed_stat_resp:
+                                qna_status = embed_stat_resp.get('embedding_status', 'Unknown')
 
-                            if 'history_meetings_list' in st.session_state: del st.session_state.history_meetings_list
-                            if 'selected_meeting_analyses' in st.session_state: del st.session_state.selected_meeting_analyses
-                            if 'chatbot_statuses' in st.session_state: st.session_state.chatbot_statuses = {}
+                            st.session_state.current_qna_status = qna_status
 
+                            if qna_status == "COMPLETED":
+                                job['status'] = "QNA_READY"
+                            elif qna_status == "FAILED":
+                                job['status'] = "QNA_FAILED"
+                            elif qna_status not in ["PENDING", "PROCESSING", "NONE"]:
+                                st.warning(f"Unknown Q&A status received: {qna_status}. Treating as failure.")
+                                job['status'] = "QNA_FAILED"
+                            if job['status'] == "CHECKING_QNA":
+                                time.sleep(POLLING_INTERVAL_SEC)
+                                st.rerun()
+                            else:
+                                st.rerun()
+            if st.session_state.current_analysis_result:
+                 with analysis_status_placeholder.container():
+                    st.success(f"📊 Analysis for Transcript `{transcript_id}` is complete.")
+                    participants = None
+                    try:
+                        meeting_details = make_request("GET", f"/meetings/{job['meeting_id']}/", suppress_errors=True)
+                        if isinstance(meeting_details, dict):
+                            participants = meeting_details.get('participants')
+                    except Exception: pass
+                    display_analysis_results(st.session_state.current_analysis_result, participants=participants, include_json_expander=True)
+            with qna_status_placeholder.container():
+                if job['status'] == "QNA_READY":
+                    st.success(f"✅ Q&A for Transcript `{transcript_id}` is ready!")
+                    st.info("You can now ask questions about this transcript in the 'Q&A' tab.")
+                elif job['status'] == "QNA_FAILED":
+                    st.error(f"❌ Q&A preparation failed for Transcript `{transcript_id}`.")
+                elif job['status'] == "QNA_TIMED_OUT":
+                    st.warning(f"⏳ Q&A preparation timed out for Transcript `{transcript_id}`. Last known status: {st.session_state.current_qna_status or 'N/A'}")
+                elif job['status'] in ["ANALYSIS_FAILED", "ANALYSIS_FAILED_POST"]:
+                    st.error(f"❌ Analysis failed for Transcript `{transcript_id}`. Q&A not available.")
+                elif job['status'] == "ANALYSIS_TIMED_OUT":
+                     st.warning(f"⏳ Analysis processing timed out for Transcript `{transcript_id}`. Q&A not available.")
+            terminal_states = ["QNA_READY", "QNA_FAILED", "QNA_TIMED_OUT",
+                               "ANALYSIS_FAILED", "ANALYSIS_FAILED_POST", "ANALYSIS_TIMED_OUT"]
+            if job['status'] in terminal_states:
+                 if st.button("Analyze Another Transcript", key="clear_analysis_job"):
+                     st.session_state.current_analysis_job = None
+                     st.session_state.current_analysis_result = None
+                     st.session_state.current_qna_status = None
+                     st.rerun()
 
-                        elif submission_response is None: st.error("❌ Transcript submission failed (Connection/Auth Error).")
-                        else: st.error("❌ Transcript submission failed (API Error).")
-
-        else:
-            st.info("Select or create a meeting above to submit a transcript.")
     with tab_history:
-        st.header("View History & Ask Questions")
+        st.header("View History")
         st.subheader("Filter Meetings")
-        filter_col1, filter_col2, filter_col3 = st.columns([2, 1, 1])
-        with filter_col1: st.text_input("Filter by Title:", key="history_filter_title")
-        with filter_col2: st.date_input("Filter From Date:", key="history_filter_date_from")
-        with filter_col3: st.date_input("Filter To Date:", key="history_filter_date_to")
-        if st.button("🔄 Load / Filter Meetings", key="load_history_button", use_container_width=True):
-            st.session_state.selected_meeting_id_history = None
-            st.session_state.history_meeting_select = "-- Select --"
-            if 'selected_meeting_analyses' in st.session_state: del st.session_state.selected_meeting_analyses
-            if 'chatbot_statuses' in st.session_state: st.session_state.chatbot_statuses = {}
-            with st.spinner("Loading meetings..."):
-                filter_params = {'limit': 500}
-                if st.session_state.history_filter_title: filter_params['title'] = st.session_state.history_filter_title
-                if st.session_state.history_filter_date_from: filter_params['date_from'] = st.session_state.history_filter_date_from.isoformat()
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([2, 1, 1, 1])
+        with filter_col1: st.text_input("Filter by Title (contains):", key="history_filter_title")
+        with filter_col2: st.date_input("Filter From Date:", key="history_filter_date_from", value=None)
+        with filter_col3: st.date_input("Filter To Date:", key="history_filter_date_to", value=None)
+        with filter_col4:
+            st.write("")
+            st.write("")
+            if st.button("🔄 Load / Filter", key="load_history_button", use_container_width=True):
+                st.session_state.selected_meeting_id_history = None
+                st.session_state.history_meeting_select = "-- Select --"
+                st.session_state.selected_meeting_analyses = None
+                st.session_state.history_confirm_delete = None
+                st.session_state.history_meetings_list = None
+                st.rerun()
+        if st.session_state.history_meetings_list is None:
+             with st.spinner("Loading meetings..."):
+                filter_params = {'limit': 500, 'ordering': '-meeting_date'}
+                if st.session_state.history_filter_title:
+                    filter_params['title__icontains'] = st.session_state.history_filter_title
+                if st.session_state.history_filter_date_from:
+                    filter_params['meeting_date__gte'] = st.session_state.history_filter_date_from.isoformat()
                 if st.session_state.history_filter_date_to:
-                    filter_params['date_to'] = (st.session_state.history_filter_date_to + timedelta(days=1)).isoformat()
+                    filter_params['meeting_date__lte'] = (st.session_state.history_filter_date_to + timedelta(days=1)).isoformat()
 
                 meetings_data = make_request("GET", "/meetings/", params=filter_params)
                 if isinstance(meetings_data, list):
                     st.session_state.history_meetings_list = meetings_data
-                    st.success(f"Loaded {len(meetings_data)} meetings.")
                 else:
                     st.session_state.history_meetings_list = []
-                    st.warning("Failed to load meetings or none found.")
-
         current_selected_meeting_id_hist = None
-        if 'history_meetings_list' in st.session_state and st.session_state.history_meetings_list is not None:
+        meeting_options_hist = {"-- Select --": None}
+        if isinstance(st.session_state.history_meetings_list, list) and st.session_state.history_meetings_list:
             meetings_list_hist = st.session_state.history_meetings_list
-            if meetings_list_hist:
-                try: sorted_meetings_hist = sorted(meetings_list_hist, key=lambda m: m.get('meeting_date', ''), reverse=True)
-                except: sorted_meetings_hist = meetings_list_hist
+            # Create dropdown options
+            for m in meetings_list_hist:
+                m_id, m_title, m_date_str = m.get('id'), m.get('title', 'Untitled'), m.get('meeting_date', '')
+                try:
+                     m_date_formatted = datetime.fromisoformat(m_date_str.replace('Z','+00:00')).strftime('%Y-%m-%d %H:%M') if m_date_str else 'No Date'
+                except: m_date_formatted = m_date_str if m_date_str else "Invalid Date"
+                label = f"{m_title} ({m_date_formatted}) - ID:{m_id}"
+                meeting_options_hist[label] = m_id
+            selected_label_hist = st.selectbox("Select Meeting to View:", options=list(meeting_options_hist.keys()), key="history_meeting_select")
+            current_selected_meeting_id_hist = meeting_options_hist.get(selected_label_hist)
+            if st.session_state.selected_meeting_id_history != current_selected_meeting_id_hist:
+                 st.session_state.selected_meeting_id_history = current_selected_meeting_id_hist
+                 st.session_state.selected_meeting_analyses = None
+                 st.session_state.history_confirm_delete = None
+                 st.rerun()
 
-                meeting_options_hist = {"-- Select --": None}
-                for m in sorted_meetings_hist:
-                    m_id, m_title, m_date_str = m.get('id'), m.get('title', 'Untitled'), m.get('meeting_date', '')
-                    try: m_date_formatted = datetime.fromisoformat(m_date_str.replace('Z','+00:00')).strftime('%Y-%m-%d %H:%M') if m_date_str else 'No Date'
-                    except: m_date_formatted = m_date_str
-                    label = f"{m_title} ({m_date_formatted}) - ID:{m_id}"
-                    meeting_options_hist[label] = m_id
-
-                options_list_hist = list(meeting_options_hist.keys())
-                current_selection_label_hist = st.session_state.history_meeting_select
-                selected_index_hist = 0
-                if current_selection_label_hist in options_list_hist:
-                     try: selected_index_hist = options_list_hist.index(current_selection_label_hist)
-                     except ValueError: st.session_state.history_meeting_select = "-- Select --"
-
-                selected_label_hist = st.selectbox("Select Meeting to View:", options=options_list_hist, index=selected_index_hist, key="history_meeting_select")
-                current_selected_meeting_id_hist = meeting_options_hist.get(selected_label_hist)
-
-                previous_selected_id_hist = st.session_state.get('selected_meeting_id_history')
-                if previous_selected_id_hist != current_selected_meeting_id_hist:
-                     if 'selected_meeting_analyses' in st.session_state: del st.session_state.selected_meeting_analyses
-                     if 'chatbot_statuses' in st.session_state: st.session_state.chatbot_statuses = {}
-                     st.session_state.selected_meeting_id_history = current_selected_meeting_id_hist
-                     st.rerun()
-
-            elif meetings_list_hist == []: st.info("No meetings match the current filters.")
+        elif isinstance(st.session_state.history_meetings_list, list) and not st.session_state.history_meetings_list:
+             st.info("No meetings found matching the current filters.")
 
         if current_selected_meeting_id_hist:
             st.divider()
-            action_col1, action_col2, action_col3 = st.columns([1, 2, 4])
-
-            with action_col3: st.subheader(f"Details for: {st.session_state.history_meeting_select}")
-            with action_col1:
-                 delete_button_key, confirm_key = f"delete_meeting_{current_selected_meeting_id_hist}", f"confirm_delete_{current_selected_meeting_id_hist}"
-                 if st.button("🗑️", key=delete_button_key, help="Delete this meeting"): st.session_state[confirm_key] = True; st.rerun()
-                 if st.session_state.get(confirm_key):
-                     st.warning(f"**Confirm Deletion?** Meeting ID {current_selected_meeting_id_hist} and all related data will be lost.")
-                     confirm_col1, confirm_col2 = st.columns(2)
-                     with confirm_col1:
-                         if st.button("✅ Yes, Delete", key=f"confirm_yes_{current_selected_meeting_id_hist}"):
-                             with st.spinner("Deleting meeting..."): delete_resp = make_request("DELETE", f"/meetings/{current_selected_meeting_id_hist}/")
-                             if confirm_key in st.session_state: del st.session_state[confirm_key]
-                             if delete_resp is True:
-                                 st.success("Meeting deleted."); st.session_state.history_meetings_list = None; st.session_state.selected_meeting_id_history = None; st.session_state.history_meeting_select = "-- Select --"; st.rerun()
-                             else: st.error("Failed to delete meeting."); st.rerun()
-                     with confirm_col2:
-                         if st.button("❌ No, Cancel", key=f"confirm_no_{current_selected_meeting_id_hist}"):
-                             if confirm_key in st.session_state: del st.session_state[confirm_key]; st.rerun()
-
-            with action_col2:
-                if not st.session_state.get(confirm_key):
-                    if st.button(f"📊 Show/Refresh Analyses", key=f"show_analyses_{current_selected_meeting_id_hist}"):
-                        analysis_endpoint = f"/analysis/meeting/{current_selected_meeting_id_hist}/"
-                        with st.spinner("Fetching analysis results..."):
-                            analysis_response = make_request("GET", analysis_endpoint, params={"limit": 100})
-
-                        results_list = []
-                        if isinstance(analysis_response, dict) and 'items' in analysis_response:
-                            results_list = analysis_response['items']; total_count = analysis_response.get('count', len(results_list))
-                            st.info(f"Showing {len(results_list)} of {total_count} results.")
-                        elif isinstance(analysis_response, list): results_list = analysis_response
-                        elif analysis_response is not None: st.warning("Could not load analysis results.")
-
-                        st.session_state.selected_meeting_analyses = results_list
-                        st.session_state.chatbot_statuses = {}
-                        if not results_list and analysis_response is not None: st.info("No analysis results found.")
+            if st.session_state.history_confirm_delete != current_selected_meeting_id_hist:
+                header_col1, header_col2 = st.columns([4, 1])
+                with header_col1:
+                    selected_label_display = "-- Select --"
+                    if current_selected_meeting_id_hist:
+                        for label, m_id in meeting_options_hist.items():
+                            if m_id == current_selected_meeting_id_hist:
+                                selected_label_display = label
+                                break
+                        if selected_label_display == "-- Select --":
+                             selected_label_display = f"Meeting ID: {current_selected_meeting_id_hist}"
+                    st.subheader(f"Details for: {selected_label_display}")
+                with header_col2:
+                    delete_button_key = f"delete_meeting_{current_selected_meeting_id_hist}"
+                    if st.button("🗑️ Delete", key=delete_button_key, help="Delete this meeting and all its data", type="secondary"):
+                        st.session_state.history_confirm_delete = current_selected_meeting_id_hist
                         st.rerun()
+            if st.session_state.history_confirm_delete == current_selected_meeting_id_hist:
+                 st.error(f"**Confirm Deletion?** Meeting ID `{current_selected_meeting_id_hist}` and all related transcripts/analyses will be permanently lost.")
+                 confirm_col1, confirm_col2 = st.columns(2)
+                 with confirm_col1:
+                     if st.button("✅ Yes, Delete Permanently", key=f"confirm_yes_{current_selected_meeting_id_hist}", type="primary"):
+                         with st.spinner("Deleting meeting..."):
+                            delete_resp = make_request("DELETE", f"/meetings/{current_selected_meeting_id_hist}/")
+                         st.session_state.history_confirm_delete = None
+                         if delete_resp is True:
+                             st.success("Meeting deleted successfully.")
+                             st.session_state.history_meetings_list = None
+                             st.session_state.selected_meeting_id_history = None
+                             st.session_state.history_meeting_select = "-- Select --"
+                             st.session_state.selected_meeting_analyses = None
+                             st.session_state.qanda_meetings_list = None
+                             st.session_state.qanda_available_transcripts = None
+                             st.rerun()
+                         else:
+                             st.rerun()
+                 with confirm_col2:
+                     if st.button("❌ No, Cancel", key=f"confirm_no_{current_selected_meeting_id_hist}"):
+                         st.session_state.history_confirm_delete = None
+                         st.rerun()
+            if st.session_state.history_confirm_delete != current_selected_meeting_id_hist:
+                 if st.session_state.selected_meeting_analyses is None:
+                     with st.spinner(f"Fetching analyses for Meeting ID {current_selected_meeting_id_hist}..."):
+                         analysis_endpoint = f"/analysis/meeting/{current_selected_meeting_id_hist}/"
+                         analysis_response = make_request("GET", analysis_endpoint, params={"limit": 100})
 
-            if not st.session_state.get(confirm_key) and 'selected_meeting_analyses' in st.session_state:
-                analyses = st.session_state.selected_meeting_analyses
-                if analyses:
-                    participants = None
-                    try: meeting_info = next(m for m in st.session_state.history_meetings_list if m.get('id') == current_selected_meeting_id_hist); participants = meeting_info.get('participants')
+                         results_list = []
+                         if isinstance(analysis_response, list):
+                             results_list = analysis_response
+                         elif isinstance(analysis_response, dict) and 'items' in analysis_response:
+                             results_list = analysis_response['items']
+                             # TODO: Add pagination handling if API supports it and many results are expected
+                         elif analysis_response is not None:
+                              st.warning("Could not load analysis results: Unexpected format received from API.")
+                         st.session_state.selected_meeting_analyses = results_list
+
+                 analyses = st.session_state.selected_meeting_analyses
+
+                 if isinstance(analyses, list):
+                     if analyses:
+                         participants = None
+                         try:
+                             if isinstance(st.session_state.history_meetings_list, list):
+                                 meeting_info = next((m for m in st.session_state.history_meetings_list if m.get('id') == current_selected_meeting_id_hist), None)
+                                 if meeting_info:
+                                     participants = meeting_info.get('participants')
+                         except Exception: pass
+
+                         st.markdown(f"**Found {len(analyses)} analysis result(s):**")
+                         sorted_analyses = sorted(analyses, key=lambda x: x.get('created_at', '1970-01-01'), reverse=True)
+
+                         for idx, analysis_result in enumerate(sorted_analyses):
+                             transcript_id_hist = analysis_result.get('transcript_id')
+                             if not transcript_id_hist: continue
+                             analysis_title = analysis_result.get('transcript_title', f"Transcript ID: {transcript_id_hist}")
+                             created_at_str = ""
+                             try:
+                                 created_at = analysis_result.get('created_at')
+                                 if created_at: created_at_str = f" (Analyzed: {datetime.fromisoformat(str(created_at).replace('Z','+00:00')).strftime('%Y-%m-%d %H:%M')})"
+                             except: pass
+
+                             expander_label = f"{analysis_title}{created_at_str}"
+                             with st.expander(expander_label, expanded=idx == 0):
+                                 display_analysis_results(analysis_result, participants=participants, include_json_expander=False)
+                                 st.info("To ask questions about this transcript, please use the 'Q&A' tab.")
+                     else:
+                         st.info("No analysis results found for this meeting.")
+
+    with tab_qanda:
+        st.header("Ask Questions (Q&A)")
+        st.subheader("Step 1: Select Meeting for Q&A")
+        if st.session_state.qanda_meetings_list is None:
+            with st.spinner("Loading meetings..."):
+                meetings = make_request("GET","/meetings/", params={"limit": 500, "ordering": "-meeting_date"})
+                if isinstance(meetings, list):
+                    st.session_state.qanda_meetings_list = meetings
+                else:
+                    st.session_state.qanda_meetings_list = []
+
+        selected_meeting_id_qanda = None
+        meetings_list_qanda = st.session_state.qanda_meetings_list
+
+        if isinstance(meetings_list_qanda, list) and meetings_list_qanda:
+            meeting_options_qanda = {"-- Select --": None}
+            for m in meetings_list_qanda:
+                m_id, m_title, m_date_str = m.get('id'), m.get('title', 'Untitled'), m.get('meeting_date', '')
+                try: m_date_formatted = datetime.fromisoformat(m_date_str.replace('Z','+00:00')).strftime('%Y-%m-%d %H:%M') if m_date_str else 'No Date'
+                except: m_date_formatted = m_date_str if m_date_str else "Invalid Date"
+                label = f"{m_title} ({m_date_formatted}) - ID:{m_id}"
+                meeting_options_qanda[label] = m_id
+
+            selected_label_qanda = st.selectbox("Select Meeting:", options=list(meeting_options_qanda.keys()), key="qanda_meeting_select")
+            selected_meeting_id_qanda = meeting_options_qanda.get(selected_label_qanda)
+            if st.session_state.qanda_selected_meeting_id != selected_meeting_id_qanda:
+                st.session_state.qanda_selected_meeting_id = selected_meeting_id_qanda
+                st.session_state.qanda_available_transcripts = None
+                st.session_state.qanda_transcript_select = "-- Select --"
+                st.session_state.qanda_selected_transcript_id = None
+                st.session_state.qanda_selected_transcript_status = None
+
+        elif isinstance(meetings_list_qanda, list) and not meetings_list_qanda:
+             st.info("No meetings available to select for Q&A.")
+
+        st.divider()
+        if selected_meeting_id_qanda:
+            st.subheader("Step 2: Select Transcript")
+            if st.session_state.qanda_available_transcripts is None:
+                 with st.spinner(f"Loading analyzed transcripts for Meeting ID {selected_meeting_id_qanda}..."):
+                    analysis_endpoint = f"/analysis/meeting/{selected_meeting_id_qanda}/"
+                    analysis_response = make_request("GET", analysis_endpoint, params={"limit": 100})
+
+                    transcripts_list = []
+                    if isinstance(analysis_response, list):
+                        transcripts_list = analysis_response
+                    elif isinstance(analysis_response, dict) and 'items' in analysis_response:
+                        transcripts_list = analysis_response['items']
+                    elif analysis_response is not None:
+                        st.warning("Could not load transcripts/analyses: Unexpected format.")
+                    valid_analyses = [a for a in transcripts_list if a.get('transcript_id')]
+                    st.session_state.qanda_available_transcripts = sorted(valid_analyses, key=lambda x: x.get('created_at', '1970-01-01'), reverse=True)
+            available_analyses_qanda = st.session_state.qanda_available_transcripts
+            selected_transcript_id_qanda = None
+
+            if isinstance(available_analyses_qanda, list) and available_analyses_qanda:
+                transcript_options_qanda = {"-- Select --": None}
+                for a in available_analyses_qanda:
+                    t_id = a['transcript_id']
+                    t_title = a.get('transcript_title', f"Transcript ID: {t_id}")
+                    created_at_str = ""
+                    try:
+                         created_at = a.get('created_at')
+                         if created_at: created_at_str = f" (Analyzed: {datetime.fromisoformat(str(created_at).replace('Z','+00:00')).strftime('%Y-%m-%d %H:%M')})"
                     except: pass
+                    label = f"{t_title}{created_at_str}"
+                    transcript_options_qanda[label] = t_id
 
-                    st.write(f"Displaying {len(analyses)} analysis result(s):")
-                    sorted_analyses = sorted(analyses, key=lambda x: x.get('created_at', ''), reverse=True)
+                selected_label_transcript_qanda = st.selectbox("Select Transcript:",
+                                                               options=list(transcript_options_qanda.keys()), key="qanda_transcript_select" )
+                selected_transcript_id_qanda = transcript_options_qanda.get(selected_label_transcript_qanda)
+                if st.session_state.qanda_selected_transcript_id != selected_transcript_id_qanda:
+                    st.session_state.qanda_selected_transcript_id = selected_transcript_id_qanda
+                    st.session_state.qanda_selected_transcript_status = None
+                    st.rerun()
 
-                    for idx, analysis_result in enumerate(sorted_analyses):
-                        transcript_id_hist = analysis_result.get('transcript_id')
-                        if not transcript_id_hist: continue
-                        transcript_title_hist = analysis_result.get('transcript_title')
-                        expander_label = f"Analysis for Tx ID: {transcript_id_hist}" + (f' - "{transcript_title_hist}"' if transcript_title_hist else "")
+            elif isinstance(available_analyses_qanda, list) and not available_analyses_qanda:
+                 st.info("No analyzed transcripts found for this meeting.")
+            if selected_transcript_id_qanda:
+                st.subheader("Step 3: Check Status & Ask Questions")
+                force_check = st.button("🔄 Refresh Q&A Status", key=f"qanda_refresh_{selected_transcript_id_qanda}")
+                if st.session_state.qanda_selected_transcript_status is None or force_check:
+                    with st.spinner(f"Checking Q&A status for Transcript `{selected_transcript_id_qanda}`..."):
+                        embed_stat_resp_qanda = make_request("GET", f"/chatbot/status/{selected_transcript_id_qanda}/", suppress_errors=True)
+                        status_val = "CHECK_FAILED"
+                        if isinstance(embed_stat_resp_qanda, dict):
+                             status_val = embed_stat_resp_qanda.get('embedding_status', 'Unknown')
+                        st.session_state.qanda_selected_transcript_status = {"status": status_val, "checked_at": datetime.now()}
+                        if force_check:
+                            st.rerun()
+                current_status_info = st.session_state.qanda_selected_transcript_status
+                if current_status_info:
+                    status = current_status_info["status"]
+                    checked_time_str = current_status_info["checked_at"].strftime('%Y-%m-%d %H:%M:%S')
 
-                        with st.expander(expander_label, expanded=idx == 0):
-                            display_analysis_results(analysis_result, participants=participants, include_json_expander=False)
-                            embedding_status_hist = st.session_state.chatbot_statuses.get(transcript_id_hist)
-                            qa_check_key = f"check_qa_{transcript_id_hist}"
-                            qa_status_col, qa_button_col = st.columns([3,1])
-
-                            with qa_status_col:
-                                status_text = "Q&A Status: "
-                                if embedding_status_hist is None: status_text += "Not checked yet."
-                                elif embedding_status_hist == "COMPLETED": status_text += "✅ Ready"
-                                elif embedding_status_hist == "FAILED": status_text += "❌ Failed"
-                                elif embedding_status_hist == "Unknown": status_text += "⚠️ Unknown (Check Failed)"
-                                else: status_text += f"⏳ Preparing ({embedding_status_hist})"
-                                st.caption(status_text)
-
-                            with qa_button_col:
-                                if st.button("🔄 Check", key=qa_check_key, help="Refresh Q&A status"):
-                                     with st.spinner("Checking Q&A status..."):
-                                         embed_stat_resp_hist = make_request("GET", f"/chatbot/status/{transcript_id_hist}/", suppress_errors=True)
-                                     if isinstance(embed_stat_resp_hist, dict): embedding_status_hist = embed_stat_resp_hist.get('embedding_status', 'Unknown')
-                                     else: embedding_status_hist = "Unknown"
-                                     st.session_state.chatbot_statuses[transcript_id_hist] = embedding_status_hist
-                                     st.rerun()
-                            if embedding_status_hist == "COMPLETED":
-                                display_chatbot_interface(transcript_id_hist)
-                        st.markdown("---")
-                elif analyses == []: st.info("No analysis results loaded or found.")
+                    if status == "COMPLETED":
+                        st.success(f"✅ Q&A Ready (Status checked: {checked_time_str})")
+                        display_chatbot_interface(selected_transcript_id_qanda)
+                    elif status in ["PENDING", "PROCESSING", "NONE"]:
+                        st.info(f"⏳ Q&A Preparation Status: **{status}**. Please wait or refresh status. (Checked: {checked_time_str})")
+                    elif status == "FAILED":
+                        st.error(f"❌ Q&A Preparation Failed. Cannot ask questions. (Checked: {checked_time_str})")
+                    elif status == "CHECK_FAILED":
+                        st.error(f"⚠️ Could not check Q&A status. Please try refreshing. (Last attempt: {checked_time_str})")
+                    else:
+                        st.warning(f"❓ Unknown Q&A Status: **{status}**. Cannot ask questions. (Checked: {checked_time_str})")
+                else:
+                     if selected_transcript_id_qanda:
+                         st.spinner("Checking Q&A status...")
 
 elif not st.session_state.get('logged_in', False):
     st.info("👋 Welcome! Please log in using the sidebar to access the application.")
