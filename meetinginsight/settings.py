@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 from decouple import config
 from datetime import timedelta
+import warnings
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -23,6 +24,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-9!!q(unvant!=ekex2547$y!6y%e3k5!z+4gp=+7+%0bs6xt^#'
+MISTRAL_API_KEY = config("MISTRAL_API_KEY", default=None)
+MISTRAL_EMBED_MODEL = config("MISTRAL_EMBED_MODEL", default="mistral-embed")
+MISTRAL_CHAT_MODEL = config("MISTRAL_CHAT_MODEL", default="mistral-small-latest")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -45,6 +49,8 @@ INSTALLED_APPS = [
     'meetings',
     'transcripts',
     'analysis',
+    'chatbot',
+    'pgvector.django',
 ]
 
 MIDDLEWARE = [

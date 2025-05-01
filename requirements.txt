@@ -22,3 +22,10 @@ streamlit
 requests
 rav
 whitenoise[brotli]
+pgvector
+mistralai
+llama-index-core
+llama-index-vector-stores-postgres
+llama-index-readers-file
+psycopg2-binary
+

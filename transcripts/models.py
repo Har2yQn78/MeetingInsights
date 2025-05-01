@@ -11,6 +11,16 @@ class Transcript(models.Model):
         PROCESSING = 'PROCESSING', _('Processing')
         COMPLETED = 'COMPLETED', _('Completed')
         FAILED = 'FAILED', _('Failed')
+
+    class EmbeddingStatus(models.TextChoices):
+        NONE = 'NONE', _('None')
+        PENDING = 'PENDING', _('Pending')
+        PROCESSING = 'PROCESSING', _('Processing')
+        COMPLETED = 'COMPLETED', _('Completed')
+        FAILED = 'FAILED', _('Failed')
+
+    embedding_status = models.CharField(max_length=20, choices=EmbeddingStatus.choices,
+                                        default=EmbeddingStatus.NONE, db_index=True)
     meeting = models.ForeignKey(Meeting,on_delete=models.CASCADE,related_name='transcripts',)
     title = models.CharField(max_length=255, blank=True, null=True)
     raw_text = models.TextField(blank=True, null=True)
