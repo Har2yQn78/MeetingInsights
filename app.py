@@ -13,12 +13,10 @@ st.set_page_config(layout="wide", page_title="Meeting Analysis & Q&A")
 with st.sidebar:
     st.subheader("API Configuration")
     if "api_base_url" not in st.session_state:
-        st.session_state.api_base_url = "http://127.0.0.1:8000/api" # Default
+        st.session_state.api_base_url = "http://127.0.0.1:8000/api"
     st.text_input("API Base URL", key="api_base_url")
 
-# --- Authentication Functions ---
 def login(username, password):
-    """Handles user login and stores tokens in session state."""
     api_base = st.session_state.get("api_base_url", "http://127.0.0.1:8000/api")
     try:
         response = requests.post(f"{api_base}/token/pair", json={"username": username, "password": password})
@@ -26,13 +24,11 @@ def login(username, password):
         token_data = response.json()
         st.session_state.access_token = token_data["access"]
         st.session_state.refresh_token = token_data["refresh"]
-        # Set a reasonable expiry time based on ACCESS_TOKEN_LIFETIME (e.g., 24 hours)
-        # Use a buffer before actual expiry to trigger refresh
-        st.session_state.token_expiry = datetime.now() + timedelta(hours=23, minutes=55) # Example: 24h - 5min buffer
+        st.session_state.token_expiry = datetime.now() + timedelta(hours=23, minutes=55)
         st.session_state.logged_in = True
         st.session_state.username = username
         st.success("Login successful!")
-        st.rerun() # Rerun to update UI state after login
+        st.rerun()
         return True
     except requests.exceptions.RequestException as e:
         st.error(f"Login failed: {e}")
@@ -42,11 +38,10 @@ def login(username, password):
                 st.error(f"API Error: {err}")
             except json.JSONDecodeError:
                 st.error(f"API Error: Status {e.response.status_code} - {e.response.text[:200]}...")
-        logout(silent=True) # Clear any partial login state
+        logout(silent=True)
         return False
 
 def refresh_token():
-    """Attempts to refresh the JWT access token using the refresh token."""
     api_base = st.session_state.get("api_base_url", "http://127.0.0.1:8000/api")
     if 'refresh_token' not in st.session_state:
         st.warning("No refresh token available. Please log in again.")
@@ -57,10 +52,8 @@ def refresh_token():
         response.raise_for_status()
         token_data = response.json()
         st.session_state.access_token = token_data["access"]
-        # Reset expiry time after refresh
-        st.session_state.token_expiry = datetime.now() + timedelta(hours=23, minutes=55) # Example: 24h - 5min buffer
-        st.session_state.logged_in = True # Ensure logged_in is True after refresh
-        # st.info("Authentication token refreshed.") # Can be noisy, maybe disable
+        st.session_state.token_expiry = datetime.now() + timedelta(hours=23, minutes=55)
+        st.session_state.logged_in = True
         return True
     except requests.exceptions.RequestException as e:
         st.warning("Session expired or refresh failed.")
@@ -68,14 +61,13 @@ def refresh_token():
             st.error("Reason: Refresh token may be invalid or expired.")
         else:
             st.error(f"Refresh failed: {e}")
-        logout() # Log out fully if refresh fails
+        logout()
         return False
 
 def logout(silent=False):
-    """Clears authentication state from session."""
     if not silent:
         st.info("Logging out...")
-    keys_to_remove = [k for k in st.session_state if k != "api_base_url"] # Keep API base URL
+    keys_to_remove = [k for k in st.session_state if k != "api_base_url"]
     for key in keys_to_remove:
         try:
             del st.session_state[key]
@@ -83,24 +75,18 @@ def logout(silent=False):
             pass
     if not silent:
         st.success("Logged out.")
-        st.rerun() # Rerun to redirect to login state
+        st.rerun()
 
 def ensure_authenticated():
-    """Checks if user is logged in and token is valid, tries to refresh if needed."""
     if not st.session_state.get('logged_in', False) or 'access_token' not in st.session_state:
-        return False # Not logged in
-
-    # Check token expiry (with a buffer)
-    buffer_seconds = 60 # Refresh 60 seconds before actual expiry
+        return False
+    buffer_seconds = 60
     if 'token_expiry' not in st.session_state or datetime.now() >= (st.session_state.token_expiry - timedelta(seconds=buffer_seconds)):
-        # st.info("Token expiring soon, attempting refresh...") # Can be noisy
         if not refresh_token():
-            # Don't show warning here, let the calling function handle failure
-            return False # Refresh failed
-    return True # Logged in and token is likely valid
+            return False
+    return True
 
 def get_headers(include_content_type=True):
-    """Gets authorization headers, assuming token validity."""
     if 'access_token' not in st.session_state:
         st.error("Authentication token missing. Please log in.")
         return None
@@ -108,20 +94,15 @@ def get_headers(include_content_type=True):
     headers = {"Authorization": f"Bearer {st.session_state.access_token}"}
     if include_content_type:
         headers["Content-Type"] = "application/json"
-    headers["Accept"] = "application/json" # Prefer JSON responses
+    headers["Accept"] = "application/json"
     return headers
 
 def make_request(method, endpoint, json_data=None, data=None, files=None, params=None, timeout=30, suppress_errors=False, **kwargs):
-    """
-    Makes an authenticated API request, handling token refresh and errors.
-    Returns JSON response, True (for 204), text, or None on failure.
-    `suppress_errors`: If True, don't display st.error messages automatically.
-    """
     api_base = st.session_state.get("api_base_url", "http://127.0.0.1:8000/api")
     if not ensure_authenticated():
         if not suppress_errors:
              st.warning("Authentication failed or expired. Please log in.")
-        return None # Cannot make request without auth
+        return None
 
     include_content_type_header = json_data is not None and not files and not data
     headers = get_headers(include_content_type=include_content_type_header)
@@ -133,7 +114,7 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, params
         json_data = None
 
     url = f"{api_base}{endpoint}"
-    attempt_refresh = True # Flag to control refresh attempts
+    attempt_refresh = True
 
     try:
         response = requests.request(
@@ -142,7 +123,6 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, params
         )
 
         if response.status_code == 401 and attempt_refresh:
-            # if not suppress_errors: st.info("Received 401, attempting token refresh...")
             refreshed = refresh_token()
             if refreshed:
                 headers = get_headers(include_content_type=include_content_type_header)
@@ -159,9 +139,9 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, params
                      if not suppress_errors: st.error("Failed to get headers after token refresh.")
                      return None
             else:
-                return None # Refresh failed, logout already called
+                return None
 
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status()
 
         if response.status_code == 204: return True
         elif response.status_code in [200, 201, 202]:
@@ -188,7 +168,7 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, params
                     st.error(f"Detail: {detail}")
                 except json.JSONDecodeError:
                     st.error(f"Raw Error: {e.response.text[:500]}...")
-        return None # Indicate failure
+        return None
     except requests.exceptions.ConnectionError as e:
         if not suppress_errors: st.error(f"Connection Error: Could not connect to API at {api_base}. Details: {e}")
         return None
@@ -200,12 +180,10 @@ def make_request(method, endpoint, json_data=None, data=None, files=None, params
         return None
     except Exception as e:
         if not suppress_errors: st.error(f"An unexpected error occurred in make_request: {e}")
-        st.error(traceback.format_exc()) # Log full traceback for debugging
+        st.error(traceback.format_exc())
         return None
 
-# --- UI Display Functions ---
 def display_analysis_results(result, participants: Optional[List[Any]] = None, include_json_expander=True):
-    """Displays formatted analysis results."""
     if not isinstance(result, dict):
         st.warning("Invalid analysis result format received.")
         st.json(result)
@@ -272,7 +250,6 @@ def display_analysis_results(result, participants: Optional[List[Any]] = None, i
             st.json(result)
 
 def display_chatbot_interface(transcript_id):
-    """Displays the Q&A form and handles interaction."""
     st.divider()
     st.subheader(f"💬 Ask a Question about Transcript {transcript_id}")
     qa_form_key = f"qa_form_{transcript_id}"
@@ -282,14 +259,14 @@ def display_chatbot_interface(transcript_id):
     last_e_key = f'last_error_{transcript_id}'
 
     with st.form(qa_form_key, clear_on_submit=False):
-        user_question = st.text_input("Your Question:", key=qa_input_key, value=st.session_state.get(last_q_key, "")) # Pre-fill if exists
+        user_question = st.text_input("Your Question:", key=qa_input_key, value=st.session_state.get(last_q_key, ""))
         submit_qa = st.form_submit_button("Ask")
 
         if submit_qa and user_question:
-            st.session_state[last_q_key] = user_question # Store question immediately
+            st.session_state[last_q_key] = user_question
             with st.spinner("Thinking..."):
                 qa_payload = {"question": user_question}
-                answer_resp = make_request("POST", f"/chatbot/ask/{transcript_id}/", json_data=qa_payload, timeout=90) # Longer timeout
+                answer_resp = make_request("POST", f"/chatbot/ask/{transcript_id}/", json_data=qa_payload, timeout=90)
 
                 if isinstance(answer_resp, dict) and 'answer' in answer_resp:
                     st.session_state[last_a_key] = answer_resp['answer']
@@ -297,10 +274,8 @@ def display_chatbot_interface(transcript_id):
                 else:
                      st.session_state[last_a_key] = None
                      st.session_state[last_e_key] = "Failed to get an answer from the API."
-            # Rerun needed to display result outside the form
             st.rerun()
 
-    # Display last interaction outside the form
     last_q = st.session_state.get(last_q_key)
     last_a = st.session_state.get(last_a_key)
     last_e = st.session_state.get(last_e_key)
@@ -313,11 +288,8 @@ def display_chatbot_interface(transcript_id):
         elif last_e:
             st.error(last_e)
 
-
-# --- Main Application Logic ---
 st.title("🗣️ Meeting Analysis & Q&A")
 
-# Sidebar Authentication Block
 with st.sidebar:
     st.subheader("Authentication")
     if st.session_state.get('logged_in', False):
@@ -327,7 +299,7 @@ with st.sidebar:
                 remaining_time = st.session_state.token_expiry - datetime.now()
                 if remaining_time.total_seconds() > 0:
                     mins = int(remaining_time.total_seconds() // 60)
-                    st.caption(f"Session valid for approx. {mins} min") # Use caption
+                    st.caption(f"Session valid for approx. {mins} min")
             except: pass
         if st.button("Logout", key="logout_button"):
             logout()
@@ -340,10 +312,7 @@ with st.sidebar:
             if login_submitted:
                 login(username, password)
 
-# --- Main Content Area ---
 if st.session_state.get('logged_in', False):
-
-    # Initialize session state keys if they don't exist
     default_session_keys = {
         'meeting_action': "Select Existing Meeting",
         'select_meeting_dropdown': "-- Select --",
@@ -355,38 +324,28 @@ if st.session_state.get('logged_in', False):
         'analysis_tab_meetings_list': None,
         'history_meetings_list': None,
         'selected_meeting_analyses': None,
-        'chatbot_statuses': {}, # Cache for {tx_id: status}
+        'chatbot_statuses': {},
     }
     for key, default in default_session_keys.items():
         if key not in st.session_state:
             st.session_state[key] = default
-
-    # Handle navigation if a meeting was just created
     just_created_meeting_id = st.session_state.pop('just_created_meeting_id', None)
     if just_created_meeting_id:
         st.session_state.meeting_action = "Select Existing Meeting"
-        st.session_state.analysis_tab_meetings_list = None # Force refresh
+        st.session_state.analysis_tab_meetings_list = None
         st.success(f"Meeting ID {just_created_meeting_id} created. Select it below.")
-
-    # Define Tabs
     tab_analysis, tab_history = st.tabs(["✨ New Analysis", "📂 History / Q&A"])
-
-    # --- New Analysis Tab ---
     with tab_analysis:
         st.header("Submit New Transcript for Analysis")
         st.subheader("Step 1: Select or Create Meeting")
-
         meeting_action = st.radio(
             "Choose Action:",
             ["Select Existing Meeting", "Create New Meeting"],
             key="meeting_action",
             horizontal=True
         )
-
         selected_meeting_id = None
         selected_meeting_title = None
-
-        # --- Select Existing Meeting ---
         if st.session_state.meeting_action == "Select Existing Meeting":
             if st.session_state.analysis_tab_meetings_list is None:
                 with st.spinner("Loading meetings..."):
@@ -422,8 +381,6 @@ if st.session_state.get('logged_in', False):
                 if selected_meeting_id: selected_meeting_title = selected_label.split(" (")[0]
             else:
                 st.info("No meetings found. You can create a new one.")
-
-        # --- Create New Meeting ---
         elif st.session_state.meeting_action == "Create New Meeting":
              with st.form("create_meeting_form"):
                 new_title = st.text_input("New Meeting Title*", key="new_meeting_title_input")
@@ -441,8 +398,6 @@ if st.session_state.get('logged_in', False):
                             st.rerun()
                         else: st.error("Failed to create meeting.")
                     else: st.warning("Meeting title cannot be empty.")
-
-        # --- Step 2: Submit Transcript (if meeting selected) ---
         if selected_meeting_id:
             st.divider()
             st.subheader(f"Step 2: Add Transcript to '{selected_meeting_title or f'Meeting ID:{selected_meeting_id}'}'")
@@ -480,25 +435,20 @@ if st.session_state.get('logged_in', False):
                             meeting_id_from_resp = submission_response.get('meeting_id')
                             st.success(f"✅ Transcript submitted successfully (ID: {transcript_id}). Analysis queued.")
                             st.info(f"Initial Analysis Status: {initial_analysis_status}")
-
-                            # --- Start Polling Process (Focus on Analysis First) ---
                             analysis_status_placeholder = st.status(f"Processing Analysis for Transcript {transcript_id}...", expanded=True)
                             max_analysis_attempts, polling_interval = 60, 5
                             analysis_attempt = 0
                             analysis_completed = False
                             final_analysis_result, final_meeting_participants = None, None
                             current_analysis_status = initial_analysis_status
-
                             while analysis_attempt < max_analysis_attempts and not analysis_completed:
                                 analysis_attempt += 1; time.sleep(polling_interval)
                                 analysis_status_placeholder.write(f"Checking analysis status (Attempt {analysis_attempt}/{max_analysis_attempts})...")
                                 status_response = make_request("GET", f"/transcripts/status/{transcript_id}/", suppress_errors=True)
-
                                 if isinstance(status_response, dict) and 'processing_status' in status_response:
                                     current_analysis_status = status_response['processing_status']
                                     if not meeting_id_from_resp: meeting_id_from_resp = status_response.get('meeting_id')
                                     analysis_status_placeholder.update(label=f"Tx {transcript_id}: Analysis Status - {current_analysis_status}")
-
                                     if current_analysis_status == "COMPLETED":
                                         analysis_completed = True
                                         analysis_status_placeholder.write("Analysis complete! Fetching results...")
@@ -515,40 +465,34 @@ if st.session_state.get('logged_in', False):
                                             st.error("Failed to fetch completed analysis results.")
                                             analysis_status_placeholder.error("Failed to fetch analysis results.")
                                             analysis_status_placeholder.update(label="Error Fetching Results", state="error")
-                                            # Stop loop on fetch error
-
                                     elif current_analysis_status == "FAILED":
                                         error_msg = status_response.get('processing_error', 'Unknown error')
                                         st.error(f"Analysis process failed for Transcript {transcript_id}.")
                                         analysis_status_placeholder.error(f"Analysis Failed: {error_msg}")
                                         analysis_status_placeholder.update(label="Analysis Failed", state="error")
-                                        analysis_completed = True # Treat failure as 'completion' of polling
+                                        analysis_completed = True
                                     elif current_analysis_status not in ["PENDING", "PROCESSING"]:
                                         st.warning(f"Unknown analysis status: {current_analysis_status}")
                                         analysis_status_placeholder.update(label=f"Unknown Status: {current_analysis_status}", state="error")
-                                        analysis_completed = True # Stop polling on unknown status
+                                        analysis_completed = True
                                 else:
                                     analysis_status_placeholder.warning(f"Analysis status check failed (Attempt {analysis_attempt}). Retrying...")
                                     if analysis_attempt > 5 and status_response is None:
                                          analysis_status_placeholder.error("Analysis status check failed repeatedly.")
                                          analysis_status_placeholder.update(label="Error Checking Status", state="error")
-                                         analysis_completed = True # Stop polling
+                                         analysis_completed = True
 
-                            # --- End of Analysis Polling Loop ---
                             if analysis_attempt >= max_analysis_attempts and not analysis_completed:
                                 st.warning(f"Analysis polling timed out.")
                                 analysis_status_placeholder.warning(f"Polling Timeout. Status: {current_analysis_status}")
                                 analysis_status_placeholder.update(label="Analysis Polling Timeout", state="warning")
 
-                            # --- Display Analysis Results and Check Q&A ---
                             if final_analysis_result:
                                 display_analysis_results(final_analysis_result, participants=final_meeting_participants)
-
                                 st.divider(); st.subheader("Q&A Status")
                                 embedding_status_placeholder = st.empty()
                                 embedding_status_placeholder.info("Checking Q&A availability...")
                                 embed_stat_resp = make_request("GET", f"/chatbot/status/{transcript_id}/", suppress_errors=True)
-
                                 if isinstance(embed_stat_resp, dict) and 'embedding_status' in embed_stat_resp:
                                     embedding_status = embed_stat_resp['embedding_status']
                                     if embedding_status == "COMPLETED":
@@ -561,10 +505,9 @@ if st.session_state.get('logged_in', False):
                                     else: embedding_status_placeholder.warning(f"❓ Unknown Q&A status: {embedding_status}")
                                 else: embedding_status_placeholder.warning("⚠️ Could not check Q&A status.")
 
-                            elif not analysis_completed and current_analysis_status != "FAILED": # Only show error if analysis didn't timeout/fail
+                            elif not analysis_completed and current_analysis_status != "FAILED":
                                  st.error("Analysis did not complete. Cannot display results or Q&A.")
 
-                            # Clear history cache
                             if 'history_meetings_list' in st.session_state: del st.session_state.history_meetings_list
                             if 'selected_meeting_analyses' in st.session_state: del st.session_state.selected_meeting_analyses
                             if 'chatbot_statuses' in st.session_state: st.session_state.chatbot_statuses = {}
@@ -575,29 +518,24 @@ if st.session_state.get('logged_in', False):
 
         else:
             st.info("Select or create a meeting above to submit a transcript.")
-
-    # --- History / Q&A Tab ---
     with tab_history:
         st.header("View History & Ask Questions")
         st.subheader("Filter Meetings")
-
         filter_col1, filter_col2, filter_col3 = st.columns([2, 1, 1])
         with filter_col1: st.text_input("Filter by Title:", key="history_filter_title")
         with filter_col2: st.date_input("Filter From Date:", key="history_filter_date_from")
         with filter_col3: st.date_input("Filter To Date:", key="history_filter_date_to")
-
         if st.button("🔄 Load / Filter Meetings", key="load_history_button", use_container_width=True):
             st.session_state.selected_meeting_id_history = None
             st.session_state.history_meeting_select = "-- Select --"
             if 'selected_meeting_analyses' in st.session_state: del st.session_state.selected_meeting_analyses
             if 'chatbot_statuses' in st.session_state: st.session_state.chatbot_statuses = {}
-
             with st.spinner("Loading meetings..."):
                 filter_params = {'limit': 500}
                 if st.session_state.history_filter_title: filter_params['title'] = st.session_state.history_filter_title
                 if st.session_state.history_filter_date_from: filter_params['date_from'] = st.session_state.history_filter_date_from.isoformat()
                 if st.session_state.history_filter_date_to:
-                    filter_params['date_to'] = (st.session_state.history_filter_date_to + timedelta(days=1)).isoformat() # Include end date
+                    filter_params['date_to'] = (st.session_state.history_filter_date_to + timedelta(days=1)).isoformat()
 
                 meetings_data = make_request("GET", "/meetings/", params=filter_params)
                 if isinstance(meetings_data, list):
@@ -643,7 +581,7 @@ if st.session_state.get('logged_in', False):
 
         if current_selected_meeting_id_hist:
             st.divider()
-            action_col1, action_col2, action_col3 = st.columns([1, 2, 4]) # Adjusted column ratios
+            action_col1, action_col2, action_col3 = st.columns([1, 2, 4])
 
             with action_col3: st.subheader(f"Details for: {st.session_state.history_meeting_select}")
             with action_col1:
@@ -678,7 +616,7 @@ if st.session_state.get('logged_in', False):
                         elif analysis_response is not None: st.warning("Could not load analysis results.")
 
                         st.session_state.selected_meeting_analyses = results_list
-                        st.session_state.chatbot_statuses = {} # Clear chatbot cache
+                        st.session_state.chatbot_statuses = {}
                         if not results_list and analysis_response is not None: st.info("No analysis results found.")
                         st.rerun()
 
@@ -700,11 +638,9 @@ if st.session_state.get('logged_in', False):
 
                         with st.expander(expander_label, expanded=idx == 0):
                             display_analysis_results(analysis_result, participants=participants, include_json_expander=False)
-
-                            # --- Check Embedding Status and Display Chatbot ---
                             embedding_status_hist = st.session_state.chatbot_statuses.get(transcript_id_hist)
                             qa_check_key = f"check_qa_{transcript_id_hist}"
-                            qa_status_col, qa_button_col = st.columns([3,1]) # Layout for status and button
+                            qa_status_col, qa_button_col = st.columns([3,1])
 
                             with qa_status_col:
                                 status_text = "Q&A Status: "
@@ -713,7 +649,7 @@ if st.session_state.get('logged_in', False):
                                 elif embedding_status_hist == "FAILED": status_text += "❌ Failed"
                                 elif embedding_status_hist == "Unknown": status_text += "⚠️ Unknown (Check Failed)"
                                 else: status_text += f"⏳ Preparing ({embedding_status_hist})"
-                                st.caption(status_text) # Use caption for status
+                                st.caption(status_text)
 
                             with qa_button_col:
                                 if st.button("🔄 Check", key=qa_check_key, help="Refresh Q&A status"):
@@ -723,13 +659,9 @@ if st.session_state.get('logged_in', False):
                                      else: embedding_status_hist = "Unknown"
                                      st.session_state.chatbot_statuses[transcript_id_hist] = embedding_status_hist
                                      st.rerun()
-
-                            # Display chatbot if ready
                             if embedding_status_hist == "COMPLETED":
                                 display_chatbot_interface(transcript_id_hist)
-
-                        st.markdown("---") # Separator
-
+                        st.markdown("---")
                 elif analyses == []: st.info("No analysis results loaded or found.")
 
 elif not st.session_state.get('logged_in', False):
