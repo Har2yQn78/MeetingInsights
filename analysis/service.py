@@ -15,7 +15,7 @@ config = AutoConfig(search_path=config_search_path)
 
 OPENROUTER_API_KEY = config("OPENROUTER_API_KEY", default=None)
 OPENROUTER_API_BASE = config("OPENROUTER_API_BASE", default="https://openrouter.ai/api/v1")
-LLM_MODEL_NAME = config("LLM_MODEL_NAME", default="deepseek/deepseek-r1:free")
+LLM_MODEL_NAME = config("LLM_MODEL_NAME", default="deepseek/deepseek-chat-v3-0324:free")
 
 client = None
 if not OPENROUTER_API_KEY:
@@ -77,15 +77,15 @@ class TranscriptAnalysisService:
         Required JSON Output Structure (ONLY output this structure as JSON):
         {{
           "transcript_title": "Concise title (5-10 words) summarizing THIS transcript's main topic. Use null if unclear.",
-          "summary": "A 2-3 paragraph summary of key discussion points and outcomes from THIS transcript.",
+          "summary": "A 4-5 paragraph summary of key discussion points and outcomes from THIS transcript.",
           "key_points": ["List of 2-4 most important points/decisions as strings."],
           "task": "The single most prominent action item/task mentioned. Use null if none.",
           "responsible": "Person/team assigned to the action item. Use null if not specified.",
           "deadline": "Deadline for action item (YYYY-MM-DD format, converting relative dates based on reference date). Use null if not mentioned."
         }}
 
-        REMEMBER: Your final output MUST be ONLY the JSON object, starting with '{{' and ending with '}}'. No other text is allowed.
-        and also REMEMBER to always return the summary and key_points
+        Important : 1. Your final output MUST be ONLY the JSON object, starting with '{{' and ending with '}}'. No other text is allowed.
+                    2. REMEMBER to always return the summary and key_points 
         """
 
         content = None

@@ -1,7 +1,6 @@
-# Meeting Analysis API & Application
+# Meeting Analysis API & Application With RAG Q&A
 
-This project provides a Django Ninja backend API and a Streamlit frontend application for managing meeting records, submitting transcripts, processing them using a simulated LLM analysis, and retrieving the results.
-
+This project provides a Django Ninja backend API and a Streamlit frontend application for managing meeting records, submitting transcripts, processing them for analysis (summary, key points), generating vector embeddings, and enabling Retrieval-Augmented Generation (RAG) based Question & Answering on the transcript content.
 ## Features
 
 *   **Meeting Management:** CRUD operations for meetings (title, date, participants, JSON metadata).
@@ -11,6 +10,13 @@ This project provides a Django Ninja backend API and a Streamlit frontend applic
     *   Generates summary and extracts key points/action items (via LLM interaction).
     *   Provides status tracking (Pending, Processing, Completed, Failed).
     *   Includes basic error handling and retries for the analysis task.
+*   **AI RAG Workflow (Q&A):**
+    * Asynchronous generation of text embeddings for completed transcripts using Celery and Mistral AI embedding models.
+    * Stores text chunks and embeddings in PostgreSQL using the pgvector extension.
+    * Provides status tracking for embedding generation (None, Pending, Processing, Completed, Failed).
+    * Allows users to ask natural language questions about a specific transcript via the API.
+    * Retrieves relevant text chunks from the vector store based on the question.
+    * Generates answers using an LLM (Mistral AI) based on the retrieved context and the user's question.
 *   **Data Retrieval:** Fetch meeting details, transcript status/content, and analysis results.
 *   **API:** Modern API built with Django Ninja (FastAPI-like experience in Django).
 *   **Authentication:** JWT-based authentication securing API endpoints.
@@ -38,6 +44,17 @@ This project provides a Django Ninja backend API and a Streamlit frontend applic
 │ ├── service.py 
 │ ├── task.py 
 │ └── views.py 
+├── chatbot/          
+│   ├── migrations/
+│   ├── __init__.py
+│   ├── admin.py
+│   ├── api.py         
+│   ├── apps.py
+│   ├── auth.py   
+│   ├── models.py     
+│   ├── schemas.py    
+│   ├── services.py   
+│   └── tasks.py     
 ├── meetinginsight/
 │ ├── init.py
 │ ├── api.py
@@ -118,6 +135,10 @@ This project provides a Django Ninja backend API and a Streamlit frontend applic
         *   `CELERY_RESULT_BACKEND`: Often same as broker for simplicity (e.g., `redis://localhost:6379/0`).
         *   `OPENROUTER_API_KEY`: Your API key for OpenRouter AI (required for analysis).
         *   *(Optional)* Add other settings as needed (CORS origins, etc.).
+        *   `MISTRAL_API_KEY`: Your API key for MISTRALAI
+        *   `MISTRAL_EMBEDDING_DIM`: 1024
+        *   `MISTRAL_EMBED_MODEL`:
+        *   `MISTRAL_CHAT_MODEL`:
 
 5.  **Apply Database Migrations:**
     ```bash
@@ -173,10 +194,10 @@ This project provides a Django Ninja backend API and a Streamlit frontend applic
 *   **PostgreSQL:** A powerful relational database suitable for structured data like meetings and transcript metadata.
 *   **JSON Fields:** Used for `participants` and `metadata` in `Meeting`, and `key_points` in `AnalysisResult` to allow flexibility without overly complex schemas for potentially variable data structures. Trade-off is slightly less performant querying within the JSON compared to normalized fields.
 *   **AsyncOpenAI / OpenRouter:** The `TranscriptAnalysisService` uses `async` operations for interacting with the LLM API, making the Celery task more efficient by not blocking on I/O. OpenRouter provides flexibility in choosing models.
+*   **RAG Implementation:** Uses `LlamaIndex` as the orchestration layer for RAG. Text is chunked (SentenceSplitter) before embedding. Embeddings are generated asynchronously via a Celery task (chatbot.tasks.generate_embeddings_task) triggered after successful initial analysis. llama-index-vector-stores-postgres integrates LlamaIndex with the pgvector database. The Q&A API endpoint retrieves relevant chunks based on question similarity and uses Mistral's chat model for answer generation based on context.
 *   **Client-Side Text Extraction (Streamlit):** The Streamlit app now performs text extraction from uploaded files (PDF, TXT, MD) *before* sending data to the `/analysis/process/direct/` endpoint. This simplifies the backend logic for that specific endpoint (it only needs to expect `raw_text`) but puts the extraction load on the Streamlit server process. It also requires installing extraction libraries (`PyMuPDF`) in the Streamlit environment. The backend `transcripts.utils` still exists but isn't used by this primary Streamlit workflow path.
 *   **JWT Authentication:** `django-ninja-jwt` provides a simple and standard way to secure the API endpoints. Token refresh logic is handled in the Streamlit app.
 
-## Testing
 
 ## Testing
 

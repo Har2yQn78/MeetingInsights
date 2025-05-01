@@ -149,7 +149,8 @@ def upload_transcript_file(request, meeting_id: int, file: UploadedFile = File(.
 def get_transcript_status(request, transcript_id: int):
     try:
         transcript = get_object_or_404(Transcript.objects.only('id', 'meeting_id', 'processing_status',
-                                                               'processing_error', 'original_file', 'updated_at', 'async_task_id'),
+                                                               'processing_error', 'original_file', 'updated_at'
+                                                               , 'async_task_id', 'title'),
                                        id=transcript_id)
         return 200, transcript
     except Transcript.DoesNotExist:
