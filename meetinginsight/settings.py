@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 from decouple import config
 from datetime import timedelta
+import dj_database_url
+import sys
 import warnings
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -88,6 +90,7 @@ WSGI_APPLICATION = 'meetinginsight.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
@@ -97,15 +100,19 @@ DATABASES = {
 
 DATABASE_URL = config("DATABASE_URL", cast=str, default=None)
 
-if DATABASE_URL != "":
-    import dj_database_url
-    DATABASES = {
-        "default": dj_database_url.config(
-            default=DATABASE_URL,
-            conn_max_age=300,
-            conn_health_checks=True
-        )
-    }
+DATABASE_URL_FROM_ENV = config("DATABASE_URL", default=None)
+
+if DATABASE_URL_FROM_ENV:
+    DATABASES['default'] = dj_database_url.parse(
+        DATABASE_URL_FROM_ENV,
+        conn_max_age=300,
+        conn_health_checks=True,
+    )
+elif 'collectstatic' in sys.argv:
+    print(
+        "WARNING: DATABASE_URL environment variable not set. "
+        f"Using default SQLite database '{DATABASES['default']['NAME']}' for collectstatic."
+    )
 
 
 # Password validation
