@@ -58,7 +58,6 @@ async def get_transcript_analysis(request, transcript_id: int):
          else:
              return 404, {"detail": f"Transcript with id {transcript_id} not found."}
     except Exception as e:
-        logger.error(f"Error getting analysis for transcript {transcript_id}: {e}", exc_info=True)
         return 500, {"detail": "An internal server error occurred while fetching analysis results."}
 
 
@@ -136,23 +135,19 @@ async def generate_analysis(request, transcript_id: int):
     transcript_text = transcript.raw_text
     has_file = await sync_to_async(lambda: bool(transcript.original_file and transcript.original_file.name))()
     if not transcript_text and not has_file:
-        logger.warning(f"Attempted to generate analysis for transcript {transcript_id} with no text or file.")
         await sync_to_async(Transcript.objects.filter(id=transcript.id).update)(processing_status=Transcript.ProcessingStatus.FAILED,
                                                                                 processing_error="Cannot analyze: Transcript has no text content or associated file.",
                                                                                 async_task_id=None)
         return 400, {"detail": f"Transcript {transcript_id} has no text content or file to analyze. Marked as failed."}
 
     try:
-        logger.info(f"Queueing analysis task for transcript {transcript_id} via generate endpoint.")
         task = process_transcript_analysis.delay(transcript.id)
         updated_count = await sync_to_async(Transcript.objects.filter(id=transcript.id).update)(processing_status=Transcript.ProcessingStatus.PENDING,
             async_task_id=task.id, processing_error=None)
 
         if updated_count == 0:
-             logger.error(f"Failed to update transcript {transcript_id} status after queueing task (maybe deleted?).")
              return 500, {"detail": "Failed to update transcript status after queueing analysis."}
 
-        logger.info(f"Transcript {transcript_id} status set to PENDING, task ID: {task.id}")
         updated_transcript = await get_transcript_for_analysis(transcript_id)
         if updated_transcript is None:
              return 500, {"detail": "Failed to retrieve transcript status after update."}
@@ -160,7 +155,6 @@ async def generate_analysis(request, transcript_id: int):
         return 202, updated_transcript
 
     except Exception as e:
-        logger.error(f"Error queueing analysis task for transcript {transcript_id}: {e}", exc_info=True)
         await sync_to_async(Transcript.objects.filter(id=transcript.id).update)(processing_status=Transcript.ProcessingStatus.FAILED,
              processing_error=f"Failed to queue analysis task: {str(e)}",)
         return 500, {"detail": f"An unexpected error occurred while queueing the analysis task: {str(e)}"}
@@ -253,8 +247,6 @@ def get_transcript_for_analysis(transcript_id: int) -> Optional[Transcript]:
      try:
          return Transcript.objects.select_related('meeting').get(id=transcript_id)
      except Transcript.DoesNotExist:
-         logger.warning(f"Transcript {transcript_id} not found during fetch for analysis generation.")
          return None
      except Exception as e:
-         logger.error(f"Unexpected error fetching transcript {transcript_id} for analysis generation: {e}", exc_info=True)
          return None

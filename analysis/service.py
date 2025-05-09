@@ -61,13 +61,59 @@ class TranscriptAnalysisService:
         Your entire response MUST start with '{' and end with '}'. You MUST adhere to the JSON structure provided by the user.
         Output ONLY the JSON.
         """
+        example_reference_date_str = today.strftime('%Y-%m-%d %A')
+        days_until_friday = (4 - today.weekday() + 7) % 7
+        next_friday_example_date = today + timedelta(days=days_until_friday)
+        if next_friday_example_date <= today:
+            next_friday_example_date += timedelta(days=7)
+        tomorrow_example_date = today + timedelta(days=1)
+
+        example_transcript_content = f"""
+Alice: Hi Bob, let's discuss the Q3 marketing plan. We need to finalize the budget by next Friday.
+Bob: Sounds good, Alice. I've drafted the initial figures. The main campaign will focus on social media.
+Alice: Great. Can you send me the draft by end of day tomorrow?
+Bob: Will do.
+Alice: We should also aim to get a clear title for this meeting discussion. For example, 'Q3 Marketing Kick-off'.
+Bob: Yes, 'Q3 Marketing Plan Review' could work.
+"""
+        example_json_output_str = f"""{{
+  "transcript_title": "Q3 Marketing Plan Review and Budget Finalization",
+  "summary": "The meeting between Alice and Bob centered on the Q3 marketing plan. A primary topic was the budget, which needs to be finalized by 'next Friday', translating to {next_friday_example_date.strftime('%Y-%m-%d')} based on the reference date of {example_reference_date_str}. Bob confirmed he has already drafted initial figures for this budget.\\n\\nThe discussion highlighted that the main marketing campaign will concentrate on social media. Alice assigned Bob the task of sending her the draft budget figures. This action item is due by 'end of day tomorrow', which corresponds to {tomorrow_example_date.strftime('%Y-%m-%d')}.\\n\\nBoth participants acknowledged the importance of these steps for moving forward with the Q3 strategy. They also discussed the importance of a clear meeting title, suggesting options like 'Q3 Marketing Kick-off' or 'Q3 Marketing Plan Review', reflecting a need for structured documentation.",
+  "key_points": [
+    "Finalize Q3 marketing budget by {next_friday_example_date.strftime('%Y-%m-%d')} (from 'next Friday').",
+    "Bob to send draft budget figures to Alice by {tomorrow_example_date.strftime('%Y-%m-%d')} (from 'end of day tomorrow').",
+    "The main marketing campaign will focus on social media.",
+    "A clear title for the meeting discussion should be established, such as 'Q3 Marketing Plan Review'."
+  ],
+  "task": "Send draft Q3 marketing budget figures to Alice.",
+  "responsible": "Bob",
+  "deadline": "{tomorrow_example_date.strftime('%Y-%m-%d')}"
+}}"""
 
         user_prompt = f"""
         Analyze the following meeting transcript provided below.
         Extract the required information accurately and concisely.
         Your response MUST be formatted STRICTLY as a single JSON object containing ONLY the keys specified in the 'Required JSON Output Structure' section below. Use JSON null for missing information.
 
-        Reference Date for relative date calculation (e.g., "next Tuesday"): {today.strftime('%Y-%m-%d %A')}
+        First, here is an example of how to process a transcript:
+
+        --- START EXAMPLE ---
+        Reference Date for this example (today's date): {example_reference_date_str}
+
+        Example Transcript:
+        --- START EXAMPLE TRANSCRIPT ---
+        {example_transcript_content}
+        --- END EXAMPLE TRANSCRIPT ---
+
+        Expected JSON Output for this example:
+        --- START EXAMPLE JSON OUTPUT ---
+        {example_json_output_str}
+        --- END EXAMPLE JSON OUTPUT ---
+        --- END EXAMPLE ---
+
+        Now, analyze the actual transcript provided below using the same process and adhering to the JSON structure.
+
+        Reference Date for relative date calculation for the transcript below (e.g., "next Tuesday"): {today.strftime('%Y-%m-%d %A')}
 
         Transcript to Analyze:
         --- START TRANSCRIPT ---
@@ -85,7 +131,7 @@ class TranscriptAnalysisService:
         }}
 
         Important : 1. Your final output MUST be ONLY the JSON object, starting with '{{' and ending with '}}'. No other text is allowed.
-                    2. REMEMBER to always return the summary and key_points 
+                    2. REMEMBER to always return the summary and key_points.
         """
 
         content = None
@@ -175,6 +221,7 @@ class TranscriptAnalysisService:
              raise ValueError(f"Failed to process analysis result from LLM: {e}. Response excerpt: {logged_content_excerpt}") from e
         except ConnectionError as e:
              logger.error(f"LLM Client Connection Error: {e}", exc_info=True)
+             raise
         except Exception as e:
             logger.error(f"Unexpected error during transcript analysis with model {self.model}: {e}", exc_info=True)
             raise RuntimeError(f"An unexpected error occurred during transcript analysis: {e}") from e
@@ -187,4 +234,4 @@ class TranscriptAnalysisService:
             return result
         except Exception as e:
              logger.error(f"Error executing async analysis via sync wrapper: {type(e).__name__} - {e}", exc_info=True)
-             raise e
+             raise
